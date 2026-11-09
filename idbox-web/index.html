@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OMA//DASH</title>
+<link rel="stylesheet" href="/style.css?v=6">
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div class="scan"></div>
+
+<header class="top">
+  <div class="brand">
+    <div class="glitch" data-text="OMA//DASH">OMA<span>//</span>DASH</div>
+    <div class="sub">NEURAL LINK &middot; LAN 192.168.5.0/24</div>
+  </div>
+  <div class="top-right">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="pill" id="apiState">LINK --</div>
+  </div>
+</header>
+
+<main id="grid">
+  <section class="panel wide" id="p-host">
+    <h2>OMASERVER <em>192.168.5.245</em></h2>
+    <div class="host-top">
+      <div class="gauge">
+        <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="cpuArc" cx="60" cy="60" r="52"/></svg>
+        <div class="gauge-txt"><b id="cpuVal">--</b><span>CPU %</span></div>
+      </div>
+      <div class="stat-list">
+        <div><label>LOAD</label><b id="load">--</b></div>
+        <div><label>UPTIME</label><b id="uptime">--</b></div>
+        <div><label>GPU</label><b id="gpu">--</b></div>
+        <div><label>TEMP</label><b id="temp">--</b></div>
+        <div><label>CPUs</label><b id="cores">--</b></div>
+      </div>
+      <div class="bars">
+        <div class="bar-row"><label>MEM</label><div class="bar"><i id="memBar"></i></div><span id="memTxt">--</span></div>
+        <div class="bar-row"><label>SWAP</label><div class="bar"><i id="swapBar"></i></div><span id="swapTxt">--</span></div>
+        <div id="disks"></div>
+      </div>
+    </div>
+    <canvas id="cpuHist" class="spark" height="46"></canvas>
+  </section>
+
+  <section class="panel" id="p-net">
+    <h2>NETWORK <em><span id="aliveCount">0</span>/254</em></h2>
+    <div class="net-top">
+      <div><label>RTT API</label><b id="rtt">--</b></div>
+      <div><label>RX</label><b id="rx">--</b></div>
+      <div><label>TX</label><b id="tx">--</b></div>
+    </div>
+    <canvas id="rttHist" class="spark" height="38"></canvas>
+    <div class="tablewrap">
+      <table id="devTable">
+        <thead><tr><th>IP</th><th>HOST</th><th>MAC / VENDOR</th><th>RTT</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="p-dev">
+    <h2>IDBOX V2 <em>192.168.5.129</em></h2>
+    <div class="dev-top">
+      <div><label>CPU</label><b id="dCpu">--</b></div>
+      <div><label>MEM</label><b id="dMem">--</b></div>
+      <div><label>TEMP</label><b id="dTemp">--</b></div>
+      <div><label>UPTIME</label><b id="dUp">--</b></div>
+    </div>
+    <div class="bar-row"><label>ROOT</label><div class="bar"><i id="dRoot"></i></div><span id="dRootTxt">--</span></div>
+    <div class="bar-row"><label>USER</label><div class="bar"><i id="dUser"></i></div><span id="dUserTxt">--</span></div>
+    <canvas id="dHist" class="spark" height="34"></canvas>
+    <div class="tiny" id="dMeta">--</div>
+  </section>
+
+  <section class="panel" id="p-svc">
+    <h2>SERVICES</h2>
+    <ul class="svc" id="svcList"></ul>
+  </section>
+
+  <section class="panel" id="p-docker">
+    <h2>CONTAINERS</h2>
+    <ul class="docker" id="dockerList"></ul>
+  </section>
+
+  <section class="panel" id="p-proc">
+    <h2>TOP PROCESSES</h2>
+    <ul class="procs" id="procList"></ul>
+  </section>
+
+  <section class="panel wide" id="p-log">
+    <h2>EVENT STREAM</h2>
+    <ul class="log" id="logList"></ul>
+  </section>
+</main>
+
+<footer class="tick"><div id="ticker">INITIALIZING UPLINK...</div></footer>
+
+<script src="/app.js?v=6"></script>
+</body>
+</html>

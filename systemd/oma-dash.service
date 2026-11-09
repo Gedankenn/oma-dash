@@ -1,0 +1,11 @@
+[Unit]
+Description=OMA//DASH telemetry API and dashboard
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/server/dash/statsd.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

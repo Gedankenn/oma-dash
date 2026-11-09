@@ -1,0 +1,9 @@
+#!/bin/sh
+# /etc/init.d/fbdash - start the OMA//DASH framebuffer renderer at boot
+BIN=/mnt/fs_user/fbdash
+case "$1" in
+  start) [ -x "$BIN" ] && ($BIN >/dev/null 2>&1 &) ;;
+  stop)  kill $(pidof fbdash) 2>/dev/null ;;
+  restart) "$0" stop; sleep 1; "$0" start ;;
+  *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
