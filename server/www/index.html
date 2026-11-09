@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OMA//DASH — omaserver</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div class="scan"></div>
+
+<header class="top">
+  <div class="brand">
+    <div class="glitch" data-text="OMA//DASH">OMA<span>//</span>DASH</div>
+    <div class="sub">OMASERVER · 192.168.5.245 · NEURAL LINK</div>
+  </div>
+  <div class="top-right">
+    <div class="meta"><label>UPTIME</label><b id="uptime">--</b></div>
+    <div class="meta"><label>LOAD</label><b id="load">--</b></div>
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="pill" id="apiState">LINK --</div>
+  </div>
+</header>
+
+<main id="grid">
+  <section class="panel p-host">
+    <h2>HOST CORE <em id="coresLabel">--</em></h2>
+    <div class="host">
+      <div class="gauge">
+        <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="cpuArc" cx="60" cy="60" r="52"/></svg>
+        <div class="gauge-txt"><b id="cpuVal">--</b><span>CPU %</span></div>
+      </div>
+      <div class="cores" id="coreBars"></div>
+      <div class="mini"><label>GPU</label><b id="gpu">--</b></div>
+      <div class="mini"><label>TEMP</label><b id="temp">--</b></div>
+    </div>
+    <canvas id="cpuHist" class="chart" height="64"></canvas>
+  </section>
+
+  <section class="panel p-mem">
+    <h2>MEMORY</h2>
+    <div class="bar-row"><label>RAM</label><div class="bar"><i id="memBar"></i></div><span id="memTxt">--</span></div>
+    <div class="bar-row"><label>SWAP</label><div class="bar"><i id="swapBar"></i></div><span id="swapTxt">--</span></div>
+    <canvas id="memHist" class="chart" height="64"></canvas>
+    <div class="kv" id="memKv"></div>
+  </section>
+
+  <section class="panel p-disk">
+    <h2>STORAGE</h2>
+    <div id="diskBars"></div>
+    <div class="kv" id="temps"></div>
+  </section>
+
+  <section class="panel p-net">
+    <h2>NET TRAFFIC <em>enp6s0</em></h2>
+    <div class="net-top">
+      <div><label>RX</label><b id="rx">--</b></div>
+      <div><label>TX</label><b id="tx">--</b></div>
+      <div><label>RTT API</label><b id="rtt">--</b></div>
+    </div>
+    <canvas id="netChart" class="chart" height="120"></canvas>
+  </section>
+
+  <section class="panel p-matrix">
+    <h2>NETWORK MATRIX <em><span id="aliveCount">0</span>/254</em></h2>
+    <div class="matrix" id="matrix"></div>
+    <div class="legend"><span class="on"></span> alive <span class="seen"></span> seen <span class="off"></span> idle</div>
+  </section>
+
+  <section class="panel p-dev">
+    <h2>DEVICES</h2>
+    <div class="tablewrap">
+      <table id="devTable">
+        <thead><tr><th>IP</th><th>HOST</th><th>MAC</th><th>RTT</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel p-docker">
+    <h2>CONTAINERS <em id="dockCount">--</em></h2>
+    <ul class="rows" id="dockerList"></ul>
+  </section>
+
+  <section class="panel p-proc">
+    <h2>PROCESSES</h2>
+    <ul class="rows procs" id="procList"></ul>
+  </section>
+
+  <section class="panel p-svc">
+    <h2>SERVICES</h2>
+    <ul class="svc" id="svcList"></ul>
+  </section>
+
+  <section class="panel p-ev">
+    <h2>EVENT STREAM</h2>
+    <ul class="log" id="logList"></ul>
+  </section>
+</main>
+
+<footer class="tick"><div id="ticker">INITIALIZING UPLINK...</div></footer>
+<script src="/app.js"></script>
+</body>
+</html>
