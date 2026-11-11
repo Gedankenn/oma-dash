@@ -3,3 +3,8 @@ __pycache__/
 fbdash
 state.json
 *.log
+font_aa.h
+num_aa.h
+fbdash
+fbdash.host
+*.ppm

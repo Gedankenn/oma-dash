@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""pcstats-loop: compact PC telemetry as JSON lines, 2 s cadence."""
+import glob
+import json
+import os
+import time
+
+
+def hwmon(name):
+    for d in glob.glob("/sys/class/hwmon/hwmon*"):
+        try:
+            if open(os.path.join(d, "name")).read().strip() == name:
+                return d
+        except Exception:
+            pass
+    return None
+
+
+def val(path, scale=1.0):
+    try:
+        return float(open(path).read().strip()) / scale
+    except Exception:
+        return None
+
+
+dev = {
+    "k10temp": hwmon("k10temp"),
+    "nct": hwmon("nct6779"),
+    "nvme": hwmon("nvme"),
+}
+
+
+def pick_gpu():
+    """Escolhe a GPU dedicada: a de maior VRAM. card0 num Ryzen é a iGPU (Renoir)."""
+    best = None
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
+        try:
+            vram = int(open(os.path.join(card, "device", "mem_info_vram_total")).read())
+        except Exception:
+            continue
+        if best is None or vram > best[1]:
+            best = (card, vram)
+    return best[0] if best else None
+
+
+GPU_CARD = pick_gpu()
+
+# Nome legivel do cartao. O sysfs nao expoe product_name nesta geracao, entao
+# mapeamos por PCI_ID (o mesmo cartao que escolhemos por VRAM) e so caimos num
+# nome generico se o ID nao for conhecido — painel mostra "GPU ---" nesse caso.
+GPU_PCI_NAMES = {
+    "1002:731f": "RX 5600 XT",
+    "1002:73ff": "RX 6600",
+    "1002:1636": "iGPU Renoir",
+}
+
+
+def pci_id(card):
+    try:
+        for line in open(os.path.join(card, "device", "uevent")):
+            if line.startswith("PCI_ID="):
+                return line.split("=", 1)[1].strip().lower()
+    except Exception:
+        pass
+    return None
+
+
+def gpu_name(card):
+    if not card:
+        return ""
+    pid = pci_id(card)
+    if pid and pid in GPU_PCI_NAMES:
+        return GPU_PCI_NAMES[pid]
+    try:
+        v = open(os.path.join(card, "device", "product_name")).read().strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    vend = None
+    try:
+        vend = open(os.path.join(card, "device", "vendor")).read().strip().lower()
+    except Exception:
+        pass
+    return {"0x1002": "AMD GPU", "0x10de": "NVIDIA GPU", "0x8086": "Intel GPU"}.get(vend, "")
+
+
+GPU_NAME = gpu_name(GPU_CARD)[:18]
+
+
+def cpu_name():
+    """Modelo legivel da CPU. "AMD Ryzen 5 4600G with Radeon Graphics" -> "Ryzen 5 4600G"."""
+    raw = ""
+    try:
+        for line in open("/proc/cpuinfo"):
+            if line.startswith("model name"):
+                raw = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        return ""
+    for junk in ("(R)", "(TM)", "(tm)", "CPU", "Processor"):
+        raw = raw.replace(junk, "")
+    raw = raw.split(" with ")[0]
+    for brand in ("AMD ", "Intel ", "ARM ", "Qualcomm "):
+        if raw.startswith(brand):
+            raw = raw[len(brand):]
+    return " ".join(raw.split())[:22]
+
+
+CPU_NAME = cpu_name()
+
+
+def gpu_hwmon(card):
+    hits = glob.glob(os.path.join(card, "device", "hwmon", "hwmon*"))
+    return hits[0] if hits else None
+
+
+def read_cpu():
+    with open("/proc/stat") as f:
+        p = f.readline().split()[1:]
+        v = list(map(int, p))
+    idle = v[3] + (v[4] if len(v) > 4 else 0)
+    return sum(v), idle
+
+
+def meminfo():
+    d = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            k, x = line.split(":", 1)
+            d[k] = int(x.strip().split()[0]) * 1024
+    return d
+
+
+prev = read_cpu()
+while True:
+    time.sleep(2)
+    cur = read_cpu()
+    tot, idle = cur
+    dt = tot - prev[0]
+    di = idle - prev[1]
+    cpu = round(100.0 * (dt - di) / dt, 1) if dt > 0 else 0.0
+    prev = cur
+
+    m = meminfo()
+    memp = round(100.0 * (m["MemTotal"] - m.get("MemAvailable", m["MemFree"])) / m["MemTotal"], 1)
+
+    gpu = pwr = gt = ct = None
+    gh = gpu_hwmon(GPU_CARD) if GPU_CARD else None
+    if GPU_CARD:
+        gpu = val(os.path.join(GPU_CARD, "device", "gpu_busy_percent"))
+    if gh:
+        gt = val(os.path.join(gh, "temp1_input"), 1000)
+        pwr = val(os.path.join(gh, "power1_average"), 1e6)
+    if dev["k10temp"]:
+        ct = val(os.path.join(dev["k10temp"], "temp1_input"), 1000)
+    fans = []
+    if dev["nct"]:
+        for i in range(1, 6):
+            f = val(os.path.join(dev["nct"], f"fan{i}_input"))
+            fans.append(int(f) if f is not None else 0)
+    gf = None
+    if gh:
+        gf = val(os.path.join(gh, "fan1_input"))
+    load = float(open("/proc/loadavg").read().split()[0])
+    up = int(float(open("/proc/uptime").read().split()[0]))
+
+    print(json.dumps({"c": cpu, "m": memp, "g": gpu, "gt": gt, "ct": ct,
+                      "f": fans[:5], "gf": int(gf) if gf else 0,
+                      "pw": round(pwr, 1) if pwr else None,
+                      "l": load, "u": up, "gn": GPU_NAME, "cn": CPU_NAME}, ensure_ascii=False), flush=True)
