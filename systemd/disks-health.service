@@ -1,0 +1,11 @@
+[Unit]
+Description=Saude SMART dos discos (oma-dash)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/server/dash/disks-health.py
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -18,10 +18,10 @@ parts — plain HTML/CSS/JS plus a single Python stdlib HTTP server.
 - **Storage** — per-mount usage bars, temperatures per sensor.
 - **Net traffic** — live RX/TX area chart for the uplink interface, API round-trip time.
 - **Network matrix** — a 16×16 grid covering a /24: live hosts light up; host table with MAC, vendor, hostname and RTT.
-- **Containers** — `docker ps` state plus per-container CPU%/MEM% from `docker stats`.
+- **Containers** — `docker ps -a` (stopped first) with CPU%/MEM% from `docker stats`, **start/stop buttons** and an audit log (`actions.log`).
 - **Processes** — top processes by CPU with relative bars.
 - **Services** — HTTP health checks with latency for a configurable list.
-- **Event stream** — transitions (service down/up, container down/up, API loss).
+- **Disk health** — SMART per disk (PASSED/FAILED, temperature, power-on hours, reallocated sectors), refreshed daily by `disks-health.py` (systemd timer, smartctl in a container so it needs no root on the host).
 
 ## Architecture
 
@@ -79,10 +79,12 @@ sudo ufw allow from 192.168.5.0/24 to any port 1985 proto tcp
 | Endpoint | Payload |
 |---|---|
 | `/` | dashboard |
-| `/stats` | host, cpu, cores, mem, swap, disks, temps, gpu, docker (+stats), health, procs, history |
+| `/stats` | host, cpu, cores, mem, swap, disks, temps, gpu, docker (+`docker_all`), `disk_health`, health, procs, history |
+| `POST /api/containers/<name>/(start\|stop\|restart)` | starts/stops a container, appends `time · ip · action · name` to `actions.log` |
 | `/history` | ring buffers (120 × 2 s): `ts`, `cpu`, `mem`, `rx`, `tx` |
 | `/network` | alive/total plus devices (ip, mac, vendor, host, ports, rtt, rtt history) |
 | `/health` | liveness probe |
+| `/screen.txt` | compact feed for the iDBox LCD panel (480x272) |
 
 All JSON responses send `Access-Control-Allow-Origin: *`.
 
