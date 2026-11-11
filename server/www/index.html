@@ -7,69 +7,96 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<canvas id="fx"></canvas>
-<div class="scan"></div>
+<div class="bg-grid"></div>
 
 <header class="top">
   <div class="brand">
-    <div class="glitch" data-text="OMA//DASH">OMA<span>//</span>DASH</div>
-    <div class="sub">OMASERVER · 192.168.5.245 · NEURAL LINK</div>
+    <span class="mark">OMA<span class="sep">//</span>DASH</span>
+    <span class="sub">omaserver · 192.168.5.245</span>
   </div>
-  <div class="top-right">
-    <div class="meta"><label>UPTIME</label><b id="uptime">--</b></div>
-    <div class="meta"><label>LOAD</label><b id="load">--</b></div>
-    <div class="clock" id="clock">--:--:--</div>
-    <div class="pill" id="apiState">LINK --</div>
+  <div class="top-meta">
+    <span class="chip" id="chipUptime"><i>UP</i>--</span>
+    <span class="chip" id="chipLoad"><i>LOAD</i>--</span>
+    <span class="clock" id="clock">--:--:--</span>
+    <span class="pill" id="apiState">LINK --</span>
   </div>
 </header>
 
-<main id="grid">
-  <section class="panel p-host">
-    <h2>HOST CORE <em id="coresLabel">--</em></h2>
-    <div class="host">
-      <div class="gauge">
-        <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="cpuArc" cx="60" cy="60" r="52"/></svg>
-        <div class="gauge-txt"><b id="cpuVal">--</b><span>CPU %</span></div>
+<main class="grid">
+
+  <section class="card hero a-host">
+    <div class="card-h"><h2>HOST CORE</h2><span class="tag" id="coresLabel">--</span></div>
+    <div class="hero-body">
+      <div class="hero-num">
+        <span class="num px" id="cpuVal">--</span><span class="unit">%</span>
+        <span class="cap">CPU</span>
       </div>
       <div class="cores" id="coreBars"></div>
-      <div class="mini"><label>GPU</label><b id="gpu">--</b></div>
-      <div class="mini"><label>TEMP</label><b id="temp">--</b></div>
     </div>
-    <canvas id="cpuHist" class="chart" height="64"></canvas>
+    <canvas class="chart" id="cpuHist" height="86"></canvas>
   </section>
 
-  <section class="panel p-mem">
-    <h2>MEMORY</h2>
-    <div class="bar-row"><label>RAM</label><div class="bar"><i id="memBar"></i></div><span id="memTxt">--</span></div>
-    <div class="bar-row"><label>SWAP</label><div class="bar"><i id="swapBar"></i></div><span id="swapTxt">--</span></div>
-    <canvas id="memHist" class="chart" height="64"></canvas>
-    <div class="kv" id="memKv"></div>
+  <section class="card a-mem">
+    <div class="card-h"><h2>MEMORY</h2><span class="tag" id="memTag">--</span></div>
+    <div class="hero-num"><span class="num px" id="memVal">--</span><span class="unit">%</span><span class="cap">RAM</span></div>
+    <div class="meter"><i id="memBar"></i></div>
+    <div class="subline"><span>SWAP <b id="swapVal">--</b>%</span><span id="swapTxt">--</span></div>
+    <canvas class="chart" id="memHist" height="72"></canvas>
+    <dl class="kv" id="memKv"></dl>
   </section>
 
-  <section class="panel p-disk">
-    <h2>STORAGE</h2>
-    <div id="diskBars"></div>
-    <div class="kv" id="temps"></div>
+  <section class="card a-therm">
+    <div class="card-h"><h2>THERMAL</h2><span class="tag" id="tempTag">--</span></div>
+    <div class="hero-num"><span class="num px" id="tempVal">--</span><span class="unit">°C</span>
+      <span class="cap">CPU</span></div>
+    <div class="subline"><span>GPU <b id="gpuVal">--</b>%</span><span id="gpuState">--</span></div>
+    <div class="rows slim" id="tempList"></div>
   </section>
 
-  <section class="panel p-net">
-    <h2>NET TRAFFIC <em>enp6s0</em></h2>
-    <div class="net-top">
-      <div><label>RX</label><b id="rx">--</b></div>
-      <div><label>TX</label><b id="tx">--</b></div>
-      <div><label>RTT API</label><b id="rtt">--</b></div>
+  <section class="card wide a-net">
+    <div class="card-h"><h2>NET TRAFFIC</h2><span class="tag">enp6s0</span></div>
+    <div class="hero-row net-row">
+      <div class="hero-num small"><span class="num px" id="rxVal">--</span><span class="unit" id="rxUnit">Mbps</span><span class="cap">RX</span></div>
+      <div class="hero-num small dim"><span class="num px" id="txVal">--</span><span class="unit" id="txUnit">Mbps</span><span class="cap">TX</span></div>
     </div>
-    <canvas id="netChart" class="chart" height="120"></canvas>
+    <canvas class="chart" id="netChart" height="110"></canvas>
   </section>
 
-  <section class="panel p-matrix">
-    <h2>NETWORK MATRIX <em><span id="aliveCount">0</span>/254</em></h2>
+  <section class="card wide sky a-sky">
+    <div class="card-h"><h2>SKY</h2><span class="tag" id="skyTag">--</span></div>
+    <div class="sky-top">
+      <div class="hero-num"><span class="num px" id="wxTemp">--</span><span class="unit">°C</span>
+        <span class="cap" id="wxCond">--</span>
+        <div class="sky-sub"><span id="wxHum">--</span><span id="wxWind">--</span><span id="wxFeels">--</span></div>
+      </div>
+      <div class="days" id="wxDays"></div>
+    </div>
+    <canvas class="chart" id="wxChart" height="120"></canvas>
+  </section>
+
+  <section class="card a-sto">
+    <div class="card-h"><h2>STORAGE</h2></div>
+    <div class="rows" id="diskList"></div>
+  </section>
+
+  <section class="card a-svc">
+    <div class="card-h"><h2>SERVICES</h2><span class="tag" id="svcTag">--</span></div>
+    <div class="rows" id="svcList"></div>
+  </section>
+
+  <section class="card a-con">
+    <div class="card-h"><h2>CONTAINERS</h2><span class="tag" id="dockTag">--</span></div>
+    <div class="rows" id="dockerList"></div>
+  </section>
+
+  <section class="card a-mx">
+    <div class="card-h"><h2>NETWORK MATRIX</h2><span class="tag"><span id="aliveCount">0</span>/254</span></div>
     <div class="matrix" id="matrix"></div>
-    <div class="legend"><span class="on"></span> alive <span class="seen"></span> seen <span class="off"></span> idle</div>
+    <div class="legend"><span class="on"></span>alive<span class="seen"></span>seen<span class="off"></span>idle</div>
   </section>
 
-  <section class="panel p-dev">
-    <h2>DEVICES</h2>
+  <section class="card a-dev">
+    <div class="card-h"><h2>DEVICES</h2><span class="tag" id="devCount">--</span><button class="more" id="devMore" type="button">ver todos</button></div>
     <div class="tablewrap">
       <table id="devTable">
         <thead><tr><th>IP</th><th>HOST</th><th>MAC</th><th>RTT</th></tr></thead>
@@ -78,28 +105,25 @@
     </div>
   </section>
 
-  <section class="panel p-docker">
-    <h2>CONTAINERS <em id="dockCount">--</em></h2>
-    <ul class="rows" id="dockerList"></ul>
+  <section class="card a-proc">
+    <div class="card-h"><h2>PROCESSES</h2></div>
+    <div class="rows" id="procList"></div>
   </section>
 
-  <section class="panel p-proc">
-    <h2>PROCESSES</h2>
-    <ul class="rows procs" id="procList"></ul>
+  <section class="card a-smart">
+    <div class="card-h"><h2>SMART</h2><span class="tag" id="smartTag">--</span></div>
+    <div class="rows slim" id="smartList"></div>
   </section>
 
-  <section class="panel p-svc">
-    <h2>SERVICES</h2>
-    <ul class="svc" id="svcList"></ul>
-  </section>
-
-  <section class="panel p-ev">
-    <h2>EVENT STREAM</h2>
-    <ul class="log" id="logList"></ul>
-  </section>
 </main>
 
-<footer class="tick"><div id="ticker">INITIALIZING UPLINK...</div></footer>
+<footer class="status">
+  <span class="dot" id="statusDot"></span>
+  <span id="statusText">INITIALIZING UPLINK</span>
+  <span class="spacer"></span>
+  <span id="lastSync">--</span>
+</footer>
+
 <script src="/app.js"></script>
 </body>
 </html>
