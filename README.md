@@ -149,7 +149,7 @@ MIT — see [LICENSE](LICENSE).
 | `server/disks-health.py` | daily SMART collection (`systemd/disks-health.timer`) |
 | `server/smart-tools.Dockerfile` | tiny image with `smartmontools` (smartctl needs root; it runs in a container) |
 | `systemd/` | user units: `oma-dash.service`, `disks-health.service`, `disks-health.timer` |
-| `panel/` | iDBox LCD renderer (C, 480x272 framebuffer) — `tools/build.sh` cross-builds for armv7 |
+| `idbox-lcd/` | iDBox LCD renderer (C, 480x272 framebuffer) — `make` runs `tools/build.sh`, which bakes the AA font and cross-builds armv7 |
 | `client/pcstats-loop` | telemetry collector for a remote PC (JSON lines over SSH) |
 
 Panel notes: the framebuffer is **BGR** (convert captures with `magick -size 480x272 -depth 8 bgr:fb.raw`),

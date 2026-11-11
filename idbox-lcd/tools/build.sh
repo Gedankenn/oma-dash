@@ -11,6 +11,8 @@ cd "$(dirname "$0")/.."
 
 FONT=${FONT:-/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf}
 NUMFONT=${NUMFONT:-../projetor/assets/fonts/Manrope-800.ttf}
+# fora do repo original (projetor/) cai na mesma fonte mono — o painel continua buildando
+[ -f "$NUMFONT" ] || NUMFONT="$FONT"
 SIZES=${SIZES:-"11 13 16 22 40"}
 
 if [ ! -x tools/bake_font ] || [ tools/bake_font.c -nt tools/bake_font ]; then

@@ -2,7 +2,8 @@ CC ?= docker
 IMAGE ?= alpine:3.20
 SRC = fbdash.c
 
-all: fbdash
+all:
+	./tools/build.sh
 
 fbdash: $(SRC)
 	docker run --rm --platform linux/arm/v7 -v "$$PWD":/src $(IMAGE) sh -c \
