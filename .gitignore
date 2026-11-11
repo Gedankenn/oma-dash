@@ -8,3 +8,4 @@ num_aa.h
 fbdash
 fbdash.host
 *.ppm
+tools/bake_font
