@@ -25,6 +25,12 @@
 #define STRIDE 1440
 #define FB_SIZE (STRIDE * H)
 #define API "http://192.168.5.245:1985"
+/* permite apontar para um feed de teste: FDASH_API=http://host:porta */
+static const char *feed_file = NULL;   /* --feed: le o screen.txt de um arquivo (teste) */
+static const char *api_base(void) {
+    const char *e = getenv("FDASH_API");
+    return (e && *e) ? e : API;
+}
 #define NTAB 6
 #define MAXD 10
 #define CW 320
@@ -230,6 +236,8 @@ struct data {
     int up, gpu, dockN, dockU, alive, total;
     struct dock d[MAXD]; int dn;
     int online;
+    int alt_total, alt_crit;       /* alt=<total>|<criticos> no screen.txt */
+    char altx[64];                 /* altx=<texto do primeiro critico> */
     char clock[16];
     unsigned char hcpu[64]; int hn;
 };
@@ -321,7 +329,9 @@ static int wxcw = 0, wxch = 0, wxdirty = 1;
    the server's 120-sample history once and preload the tail. */
 static void seed_history(struct data *d) {
     static char buf[24000];
-    if (!fetch(API "/history", 3, buf, sizeof buf)) return;
+    char url[192];
+    snprintf(url, sizeof url, "%s/history", api_base());
+    if (!fetch(url, 3, buf, sizeof buf)) return;
     char *p = strstr(buf, "\"cpu\":[");
     if (!p) return;
     p += 7;
@@ -339,7 +349,9 @@ static void seed_history(struct data *d) {
 
 static int fetch_wx(struct wx *w) {
     static char buf[8192];
-    if (!fetch(API "/weather.txt", 4, buf, sizeof buf)) return 0;
+    char url[192];
+    snprintf(url, sizeof url, "%s/weather.txt", api_base());
+    if (!fetch(url, 4, buf, sizeof buf)) return 0;
     parse_wx(w, buf);
     wxdirty = 1;
     return w->have;
@@ -614,7 +626,7 @@ static void tab_wx(struct wx *w, int t) {
     }
     if (!w->have || !w->ok) {
         txt(64, 70, "NO WEATHER FEED", 255, 59, 84, &AA_FACE_11);
-        txt(64, 86, "API 192.168.5.245:1985", 60, 90, 110, &AA_FACE_11);
+        txt(64, 86, api_base(), 60, 90, 110, &AA_FACE_11);
         return;
     }
 
@@ -700,6 +712,8 @@ static void parse_feed(struct data *d, const char *s) {
         }
         else if (!strncmp(line, "dock=", 5)) sscanf(line + 5, "%d|%d", &d->dockN, &d->dockU);
         else if (!strncmp(line, "alive=", 6)) sscanf(line + 6, "%d|%d", &d->alive, &d->total);
+        else if (!strncmp(line, "altx=", 5)) feed_name(d->altx, sizeof d->altx, line + 5);
+        else if (!strncmp(line, "alt=", 4)) sscanf(line + 4, "%d|%d", &d->alt_total, &d->alt_crit);
         else if (!strncmp(line, "d=", 2) && d->dn < MAXD) {
             struct dock *dk = &d->d[d->dn];
             sscanf(line + 2, "%19[^|]|%d|%f|%f", dk->name, &dk->up, &dk->cpu, &dk->mem);
@@ -778,7 +792,20 @@ static void collect(struct data *d) {
     memcpy(d->hpc, old.hpc, sizeof d->hpc);
     memcpy(d->hpg, old.hpg, sizeof d->hpg);
     memcpy(d->hpm, old.hpm, sizeof d->hpm);
-    if (!fetch(API "/screen.txt", 2, buf, sizeof buf)) {
+    char url[192];
+    size_t got = 0;
+    if (feed_file) {                     /* teste: feed local, sem rede */
+        FILE *f = fopen(feed_file, "r");
+        if (f) {
+            got = fread(buf, 1, sizeof buf - 1, f);
+            fclose(f);
+            buf[got] = 0;
+        }
+    } else {
+        snprintf(url, sizeof url, "%s/screen.txt", api_base());
+        if (fetch(url, 2, buf, sizeof buf)) got = strlen(buf);
+    }
+    if (!got) {
         d->online = 0;
         strcpy(d->clock, "--:--:--");
         return;
@@ -893,7 +920,7 @@ static void launch_cams(void) {
     for (int i = 0; i < nslots(); i++) {
         snprintf(cmd, sizeof cmd,
                  "(wget -q -T 5 -O /tmp/cam%d.tmp '%s/cam/%s.rgb?w=%d&h=%d' && mv /tmp/cam%d.tmp /tmp/cam%d.rgb || rm -f /tmp/cam%d.tmp) &",
-                 i, API, csrc(i), CW, CH, i, i, i);
+                 i, api_base(), csrc(i), CW, CH, i, i, i);
         system(cmd);
     }
 }
@@ -1569,6 +1596,37 @@ static void tab_cam(struct data *d, int t) {
     }
 }
 
+/* Faixa de alerta do feed (alt=/altx=). Vermelha com critico, ambar com
+   aviso, ausente quando nao existe alerta. Na aba CAM vira chip no canto
+   para nao cobrir o video. */
+static void draw_alert(struct data *d, int cur) {
+    if (d->alt_total <= 0) return;
+    int crit = d->alt_crit > 0;
+    int r = 255, g = crit ? 59 : 176, b = crit ? 84 : 32;
+    char msg[160];
+    if (d->altx[0])
+        snprintf(msg, sizeof msg, "%s %d - %s", crit ? "ALERTA" : "AVISO", d->alt_total, d->altx);
+    else
+        snprintf(msg, sizeof msg, "%s %d", crit ? "ALERTA" : "AVISO", d->alt_total);
+    for (char *q = msg; *q; q++)
+        if (*q >= 'a' && *q <= 'z') *q -= 32;
+
+    int maxw = (cur == 4) ? 200 : 404;
+    while (msg[0] && tw(&AA_FACE_11, msg) > maxw) msg[strlen(msg) - 1] = 0;
+    if (!msg[0]) snprintf(msg, sizeof msg, "%s %d", crit ? "ALERTA" : "AVISO", d->alt_total);
+
+    int h = 14, y = 242, x, w;
+    if (cur == 4) {                      /* CAM: chip no canto, nao cobre o tile */
+        w = tw(&AA_FACE_11, msg) + 12;
+        x = 478 - w - 2;
+    } else {                             /* demais abas: faixa na base */
+        x = 58; w = 420;
+    }
+    rect(x, y, w, h, r, g, b);
+    line(x, y, x + w - 1, y, 255, crit ? 130 : 214, crit ? 148 : 96);
+    txt(x + 6, y + 2, msg, 6, 8, 12, &AA_FACE_11);
+}
+
 static void render(struct data *d, struct wx *w, int cur, int t) {
     char b[80];
     bg(t);
@@ -1585,6 +1643,7 @@ static void render(struct data *d, struct wx *w, int cur, int t) {
     case 4: tab_cam(d, t); break;
     case 5: tab_wx(w, t); break;
     }
+    draw_alert(d, cur);
 
     /* state line: what the panel is doing (was a decorative marquee) */
     char sb[96];
@@ -1611,6 +1670,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--zoom") && i + 1 < argc) cam_zoom = atoi(argv[++i]) % 4;
         else if (!strcmp(argv[i], "--nofb")) nofb = 1;                 /* render without /dev/fb0 */
         else if (!strcmp(argv[i], "--ppm") && i + 1 < argc) ppmout = argv[++i];
+        else if (!strcmp(argv[i], "--feed") && i + 1 < argc) feed_file = argv[++i];
         else if (!strcmp(argv[i], "--bench") && i + 1 < argc) bench = atoi(argv[++i]);
     }
     srand((unsigned)time(NULL));
