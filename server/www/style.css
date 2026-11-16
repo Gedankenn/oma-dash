@@ -474,3 +474,7 @@ h1, h2, .hdr, .clock{
 .alertbar-h{font-size:11px; letter-spacing:.14em; color:#fff; margin-right:6px}
 .alertbar.crit .alertbar-h{color:var(--red)}
 .alertbar-i{padding:1px 8px; border:1px solid currentColor; border-radius:999px; opacity:.92}
+
+/* o atributo hidden perdia para .alertbar{display:flex}: barra vazia deixava
+   um fio ambar de 18 px (QA 17/11) */
+#alertBar[hidden]{display:none!important; height:0; margin:0; padding:0; border:0}
