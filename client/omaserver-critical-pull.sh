@@ -83,11 +83,21 @@ trap on_exit EXIT
   echo "== $(date '+%F %T') pull -> $FINAL (link-dest: ${LAST:-nenhum}, arquivos antes: $PREV)"
 
   # 1. dumps que o rsync nao alcanca (banco 600 de root, secrets do patinho)
-  if ssh -o BatchMode=yes "$SRC" 'bash /home/server/dash/backup-dumps.sh' >>"$LOG" 2>&1; then
-    echo "   dumps: ok"
+  DLOG=$(mktemp)
+  if ssh -o BatchMode=yes "$SRC" 'bash /home/server/dash/backup-dumps.sh' >"$DLOG" 2>&1; then
+    cat "$DLOG" >>"$LOG"
+    # o flock do servidor faz o segundo dump sair com rc=0 e sem tocar em nada:
+    # registra para nao parecer que houve dump novo
+    if grep -q "ja existe dump em andamento" "$DLOG"; then
+      echo "   dumps: pulado (outro dump em andamento no servidor)"
+    else
+      echo "   dumps: ok"
+    fi
   else
+    cat "$DLOG" >>"$LOG"
     echo "   dumps: FALHOU (ver linhas acima) — seguir com o resto"
   fi
+  rm -f "$DLOG"
 
   # os arquivos 600 de root nao sao lidos pelo rsync (uid `server`): eles vem
   # consistentes do backup-dumps.sh, entao ficam fora da copia direta.
@@ -142,13 +152,14 @@ trap on_exit EXIT
 
 # retencao: so snapshots completos contam como dias guardados
 n=0
-for d in $(for x in "$DEST"/20*/; do [ -f "${x}.complete" ] && printf '%s\n' "${x%/}"; done 2>/dev/null | sort -r); do
+while IFS= read -r d; do
+  [[ -n "$d" ]] || continue
   n=$(( n + 1 ))
   if [[ $n -gt $KEEP ]]; then
     echo "   retencao: removendo $d" >>"$LOG"
     rm -rf -- "$d"
   fi
-done
+done < <(for x in "$DEST"/20*/; do [ -f "${x}.complete" ] && printf '%s\n' "${x%/}"; done 2>/dev/null | sort -r)
 
 tail -c 200000 "$LOG" > "$LOG.new" && mv "$LOG.new" "$LOG"
 exit 0

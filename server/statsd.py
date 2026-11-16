@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 1985
@@ -22,7 +23,8 @@ HIST_MAX = 120
 _lock = threading.Lock()
 _prev = {"cpu": None, "net": None, "ts": 0.0}
 _cache = {"stats": (0.0, None), "network": (0.0, None), "docker": (0.0, None),
-          "health": (0.0, None), "dstats": (0.0, {}), "procs": (0.0, None)}
+          "health": (0.0, None), "dstats": (0.0, {}), "procs": (0.0, None),
+          "memory": (0.0, None)}
 HIST = {"ts": [], "cpu": [], "mem": [], "rx": [], "tx": []}
 CORES = []
 
@@ -54,6 +56,14 @@ SERVICES = [
     ("gtavc", f"http://{LAN_IP}:8008/"),
     ("dash api", f"http://{LAN_IP}:1985/health"),
 ]
+
+# MCP de memoria do time (docker no proprio omaserver). O token vive no .env do
+# servico: o dash le na hora, nunca guarda copia.
+MEM_BASE = f"http://{LAN_IP}:8100"
+MEM_ENV = "/home/server/docker/memory/.env"
+MEM_CONTAINER = "memory-memory-api-1"
+MEM_CALL_RE = re.compile(r'^\S+\s+INFO:\s+(\S+):\d+ - "([A-Z]+) (\S+) HTTP/[\d.]+" (\d{3})')
+MEM_TS_RE = re.compile(r"\.\d+")
 
 
 # So responde para a LAN e para a tailnet. Fecha a porta para qualquer origem publica,
@@ -377,6 +387,109 @@ def procs():
         if len(p) >= 4:
             out.append({"pid": int(p[0]), "name": p[1], "cpu": _fnum(p[2]), "mem": _fnum(p[3])})
     _cache["procs"] = (now, out)
+    return out
+
+
+def _mem_token():
+    """Le o token do .env do servico de memoria (sem copiar para outro arquivo)."""
+    try:
+        with open(MEM_ENV, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == "MEMORY_TOKEN" and v.strip():
+                    return v.strip().strip('"').strip("'")
+        with open(MEM_ENV, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("MEMORY_ADMIN_TOKEN="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        return ""
+    return ""
+
+
+def _mem_get(path, token="", timeout=3):
+    req = urllib.request.Request(MEM_BASE + path, headers={"User-Agent": "oma-dash/2.0"})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read(65536).decode("utf-8", "replace"))
+
+
+def _mem_ts(txt):
+    try:
+        return datetime.fromisoformat(MEM_TS_RE.sub("", txt).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def memory_mcp():
+    """Status do MCP de memoria: saude, acervo e chamadas desde o start do container."""
+    now = time.time()
+    if now - _cache["memory"][0] < 15 and _cache["memory"][1]:
+        return _cache["memory"][1]
+    out = {"ts": now, "ok": False, "health": {}, "calls": {}}
+    try:
+        h = _mem_get("/healthz", timeout=2.5)
+        out["health"] = h
+        out["ok"] = h.get("status") == "ok" and bool(h.get("db")) and bool(h.get("embed"))
+    except Exception as e:
+        out["error"] = str(e)[:140]
+    token = _mem_token()
+    if token:
+        try:
+            out["stats"] = _mem_get("/v1/stats", token)
+        except Exception as e:
+            out["stats_error"] = str(e)[:140]
+
+    started = sh(f"docker inspect -f '{{{{.State.StartedAt}}}}' {MEM_CONTAINER}", timeout=3)
+    out["started_at"] = started
+    out["uptime_s"] = max(0, int(now - _mem_ts(started))) if started else None
+
+    raw = sh(f"docker logs -t {MEM_CONTAINER} 2>&1", timeout=8)
+    total = reads = writes = hour = day = 0
+    last_at, last_path = 0.0, ""
+    by_path, clients = {}, {}
+    cutoff_h, cutoff_d = now - 3600, now - 86400
+    for line in raw.splitlines():
+        m = MEM_CALL_RE.match(line)
+        if not m:
+            continue
+        ip, method, path = m.group(1), m.group(2), m.group(3).split("?")[0]
+        # o proprio painel fala com 127.0.0.1: nao conta como uso do time
+        if ip in ("127.0.0.1", "::1", "localhost"):
+            continue
+        if not (path.startswith("/v1/") or path.startswith("/mcp")):
+            continue
+        # /v1/stats e o proprio painel lendo o acervo: nao e uso do time
+        if path == "/v1/stats":
+            continue
+        ts = _mem_ts(line.split(" ", 1)[0])
+        key = method + " " + path
+        by_path[key] = by_path.get(key, 0) + 1
+        clients[ip] = clients.get(ip, 0) + 1
+        total += 1
+        if path in ("/v1/search", "/v1/recent") or path.startswith("/v1/memory/"):
+            reads += 1
+        elif path in ("/v1/remember", "/v1/forget"):
+            writes += 1
+        if ts >= cutoff_h:
+            hour += 1
+        if ts >= cutoff_d:
+            day += 1
+        if ts > last_at:
+            last_at, last_path = ts, key
+    out["calls"] = {
+        "total": total, "reads": reads, "writes": writes,
+        "last_at": last_at, "last_path": last_path,
+        "last_hour": hour, "last_day": day,
+        "clients": dict(sorted(clients.items(), key=lambda kv: -kv[1])[:8]),
+        "by_path": dict(sorted(by_path.items(), key=lambda kv: -kv[1])[:6]),
+    }
+    _cache["memory"] = (now, out)
     return out
 
 
@@ -1038,6 +1151,10 @@ def screen_feed():
                  next((x["device"] for x in (dh.get("disks") or []) if x.get("ok") is False), "")
              ))(disk_health() or {"disks": []}),
              f"dock={len(st['docker'])}|{sum(1 for c in st['docker'] if c['up'])}",
+             "alt=" + (lambda al: "%d|%d" % (
+                 len((al or {}).get("alerts") or []),
+                 sum(1 for a in ((al or {}).get("alerts") or []) if a.get("level") == "crit")
+             ))(alerts()),
              f"alive={nw.get('alive',0)}|{nw.get('total',254)}"]
     for dev in nw.get("devices", []):
         if dev.get("alive"):
@@ -1069,6 +1186,14 @@ def screen_feed():
             lines.append("pcn=" + cn)
     else:
         lines.append("p=off")
+    # resumo do alerta para o painel do iDBox (fonte bitmap: so ASCII, curto).
+    # O painel esta na sala: cobre o caso "o PC do alerta esta desligado".
+    _al = (alerts() or {}).get("alerts") or []
+    _crit = [a for a in _al if a.get("level") == "crit"] or _al
+    if _crit:
+        _txt = "".join(ch for ch in str(_crit[0].get("text") or "")
+                       if 32 <= ord(ch) < 127 and ch != "|")[:46]
+        lines.append("altx=" + (_txt or "ver dash"))
     for src in cam_list():
         lines.append(f"c={src}")
     lines.extend(audio_feed_lines())
@@ -1177,6 +1302,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({k: list(HIST[k]) for k in HIST})
             elif p == "/network":
                 self._json(network())
+            elif p == "/memory":
+                self._json(memory_mcp())
             elif p == "/health":
                 self._json({"ok": True, "ts": time.time()})
             elif p == "/screen.txt":
