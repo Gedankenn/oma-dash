@@ -43,8 +43,9 @@ OURS = {
     "70:fd:46": "Samsung", "b2:72:33": "random MAC", "8a:92:56": "random MAC",
     "ba:7a:d6": "random MAC", "22:35:5c": "local MAC",
 }
+# 16/11: nomes antigos de volta (so o hub continua NETWATCH); URL e porta iguais
 SERVICES = [
-    ("oma-hub", f"http://{LAN_IP}:80/"),
+    ("NETWATCH", f"http://{LAN_IP}:80/"),
     ("go2rtc", f"http://{LAN_IP}:1984/"),
     ("jellyfin", f"http://{LAN_IP}:8096/health"),
     ("qBittorrent", f"http://{LAN_IP}:8081/"),
@@ -169,6 +170,15 @@ def sampler():
             pass
 
 
+def _fnum(valor, padrao=0.0):
+    """float() que nao explode com '<defunct>', '--', '' ou '0.15%'."""
+    try:
+        txt = str(valor).strip().replace("%", "")
+        return float(txt)
+    except (TypeError, ValueError):
+        return padrao
+
+
 def docker_stats_loop():
     while True:
         try:
@@ -176,7 +186,7 @@ def docker_stats_loop():
             st = {}
             for line in raw.splitlines():
                 p = line.split("|")
-                if len(p) >= 4:
+                if len(p) >= 4 and p[0].strip() and not p[0].startswith("<"):
                     st[p[0]] = {"cpu": p[1].strip(), "mem_pct": p[2].strip(), "mem": p[3].strip()}
             _cache["dstats"] = (time.time(), st)
         except Exception:
@@ -268,6 +278,18 @@ def disk_health():
         return None
 
 
+ALERTS_FILE = "/home/server/dash/alerts.json"
+
+
+def alerts():
+    """Alertas gravados pelo watch-health.py (timer de 5 min)."""
+    try:
+        with open(ALERTS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def docker_ps():
     now = time.time()
     if now - _cache["docker"][0] < 4 and _cache["docker"][1] is not None:
@@ -353,7 +375,7 @@ def procs():
     for line in raw.splitlines():
         p = line.split(None, 3)
         if len(p) >= 4:
-            out.append({"pid": int(p[0]), "name": p[1], "cpu": float(p[2]), "mem": float(p[3])})
+            out.append({"pid": int(p[0]), "name": p[1], "cpu": _fnum(p[2]), "mem": _fnum(p[3])})
     _cache["procs"] = (now, out)
     return out
 
@@ -383,6 +405,7 @@ def stats():
         "docker": docker_ps(),
         "docker_all": docker_ps_all(),
         "disk_health": disk_health(),
+        "alerts": alerts(),
         "dstats": _cache["dstats"][1],
         "health": health(),
         "procs": procs(),
@@ -551,6 +574,26 @@ def cam_cfg():
     return cfg
 
 
+def cam_list():
+    """Cameras que existem de verdade: chaves do /api/streams do go2rtc.
+
+    Antes o feed anunciava "cam", "cam2" e "samsung" fixos; "cam2" nao existe,
+    e o painel desenhava 4 tiles com dois OFF.
+    """
+    cfg = cam_cfg()
+    base = cfg.get("GO2RTC_URL", "http://127.0.0.1:1984")
+    auth = (cfg.get("GO2RTC_USER", ""), cfg.get("GO2RTC_PASS", ""))
+    try:
+        r = requests.get(base + "/api/streams", auth=auth, timeout=3)
+        if r.ok:
+            nomes = [n for n in (r.json() or {}) if n]
+            if nomes:
+                return sorted(nomes)[:4]
+    except Exception:
+        pass
+    return ["cam", "samsung"]
+
+
 def cam_jpeg(src, timeout=2):
     c = cam_cfg()
     url = c.get("GO2RTC_URL", "http://127.0.0.1:1984")
@@ -592,18 +635,94 @@ def cam_worker(src, w, h):
         time.sleep(5)
 
 
-def start_cam_workers(w=320, h=180):
-    for src in CAMSRCS:
-        threading.Thread(target=cam_worker, args=(src, w, h), daemon=True).start()
+# --- video fluido: um ffmpeg persistente por camera+tamanho -----------------
+# Antes cada quadro custava curl+ffmpeg (0,4 a 3 s) e o cache devolvia o mesmo
+# quadro por ate 3 s -> ~0,5 fps, que na tela vira "travado". Agora um ffmpeg
+# fica lendo o relay RTSP do go2rtc (127.0.0.1:8554) e o ultimo quadro decodificado
+# e servido na hora, sem processo novo por requisicao.
+_camlive = {}
+_camlive_ts = {}
+_camlive_th = {}
+_camlive_lock = threading.Lock()
+CAM_FPS = 15
 
 
-def cam_rgb(src, w, h):
+def cam_live_loop(src, w, h):
+    key = (src, w, h)
+    need = w * h * 3
+    url = "rtsp://127.0.0.1:8554/" + src
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+           "-fflags", "nobuffer", "-flags", "low_delay",
+           "-rtsp_transport", "tcp", "-i", url, "-an",
+           "-vf", "fps=%d,scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d"
+                  % (CAM_FPS, w, h, w, h),
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    while time.time() - _camwant.get(key, 0) < 20:        # para quando ninguem pede
+        p = None
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            while time.time() - _camwant.get(key, 0) < 20:
+                buf = p.stdout.read(need)
+                if not buf or len(buf) < need:
+                    break
+                with _camlive_lock:
+                    _camlive[key] = buf
+                    _camlive_ts[key] = time.time()
+        except Exception:
+            pass
+        finally:
+            if p is not None:
+                try:
+                    p.kill()
+                    p.wait(timeout=3)
+                except Exception:
+                    pass
+        time.sleep(1)
+    with _camlive_lock:
+        _camlive.pop(key, None)
+        _camlive_ts.pop(key, None)
+        _camlive_th.pop(key, None)
+
+
+def cam_live_start(src, w, h):
     key = (src, w, h)
     _camwant[key] = time.time()
+    if key not in _camlive_th:
+        th = threading.Thread(target=cam_live_loop, args=(src, w, h), daemon=True)
+        _camlive_th[key] = th
+        th.start()
+
+
+def start_cam_workers(w=320, h=180):
+    # nada a pre-aquecer: o ffmpeg persistente sobe no primeiro pedido do painel
+    return
+
+
+def cam_rgb(src, w, h, espera=4.0):
+    key = (src, w, h)
+    cam_live_start(src, w, h)
+    with _camlive_lock:
+        buf = _camlive.get(key)
+        ts = _camlive_ts.get(key, 0)
+    if buf and time.time() - ts < 2.0:
+        return buf
     hit = _camthumb.get(key)
-    if hit and time.time() - hit[0] < 10:
+    if hit and time.time() - hit[0] < 3:
         return hit[1]
-    return b""
+    # partida fria: espera o fluxo produzir o primeiro quadro
+    fim = time.time() + espera
+    while time.time() < fim:
+        time.sleep(0.05)
+        _camwant[key] = time.time()
+        with _camlive_lock:
+            buf = _camlive.get(key)
+        if buf:
+            return buf
+    data = cam_gen(src, w, h)     # ultimo recurso: snapshot do go2rtc
+    if data:
+        _camthumb[key] = (time.time(), data)
+        return data
+    return hit[1] if hit else b""
 
 
 # ---------------------------------------------------------------- weather
@@ -781,6 +900,120 @@ def weather_feed():
     return ("\n".join(lines) + "\n").encode()
 
 
+
+# ---------------------------------------------------------------- audio level
+# Nivel do audio das cameras, em dBFS, lido com ffmpeg do RTSP do go2rtc.
+# Publicado no /screen.txt:
+#   aud=<fonte>:<dB>:<alto>,...   alto = 1/0, com histerese de AUDIO_HOLD
+#   db=<dB>|<fonte>               (compatibilidade: painel antigo)
+AUDIO_LOUD = -28          # dBFS: a partir daqui o som conta como "relativamente alto"
+AUDIO_HOLD = 1.2          # s que o alerta fica aceso depois do som
+_AUDIO = {}               # src -> {"db": int|None, "ts": float, "until": float}
+_AUDIO_RE = re.compile(r"(?:RMS level dB:|Overall\.RMS_level=)\s*(-?\d+(?:\.\d+)?)")
+
+
+def audio_srcs():
+    cfg = cam_cfg()
+    raw = (cfg.get("AUDIO_SRCS") or "cam,samsung").strip()
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def audio_url(src):
+    cfg = cam_cfg()
+    tpl = (cfg.get("AUDIO_URL") or "rtsp://127.0.0.1:8554/{src}").strip()
+    return tpl.replace("{src}", src)
+
+
+def audio_state(src):
+    return _AUDIO.setdefault(src, {"db": None, "ts": 0.0, "until": 0.0})
+
+
+def audio_worker(src):
+    """Le o audio de uma camera e guarda o RMS em dBFS."""
+    import subprocess
+    while True:
+        st = audio_state(src)
+        try:
+            url = audio_url(src)
+            # -rtsp_transport so existe no demuxer RTSP; em arquivo/teste quebra o comando
+            extra = ["-rtsp_transport", "tcp"] if url.lower().startswith("rtsp") else []
+            # astats so imprime o resumo no fim do stream; com ametadata=print os
+            # valores saem a cada quadro no stdout (foi por isso que aud= ficava em "x").
+            proc = subprocess.Popen(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", *extra,
+                 "-i", url, "-vn", "-af", "astats=metadata=1:reset=1,ametadata=print:file=-",
+                 "-f", "null", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        except Exception:
+            st["db"], st["ts"] = None, time.time()
+            time.sleep(6)
+            continue
+        last = 0.0
+        try:
+            for line in proc.stdout:
+                m = _AUDIO_RE.search(line)
+                if m:
+                    valor = float(m.group(1))
+                    if -120 <= valor <= 0:
+                        st["db"] = int(round(valor))
+                        st["ts"] = time.time()
+                        last = time.time()
+                        if valor >= AUDIO_LOUD:
+                            st["until"] = time.time() + AUDIO_HOLD
+                if last and time.time() - last > 12:      # sem leitura: stream morreu
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        # nao zera o nivel ao fim do stream: mantem a ultima leitura por alguns
+        # segundos (audio_state_all descarta depois de 8 s) e evita piscar "--"
+        st["ts"] = time.time()
+        time.sleep(5)
+
+
+def start_audio_workers():
+    for src in audio_srcs():
+        threading.Thread(target=audio_worker, args=(src,), daemon=True).start()
+
+
+def audio_state_all():
+    out = {}
+    for src in audio_srcs():
+        st = audio_state(src)
+        fresco = st["db"] is not None and time.time() - st["ts"] < 8
+        out[src] = {
+            "db": st["db"] if fresco else None,
+            "loud": 1 if (fresco and time.time() < st["until"]) else 0,
+            "ts": round(st["ts"], 1),
+        }
+    return out
+
+
+def audio_feed_lines():
+    # AUDIO_FAKE_DB=-12 injeta um nivel fixo (so para testar o painel sem camera no ar)
+    fake = os.environ.get("AUDIO_FAKE_DB")
+    if fake:
+        try:
+            nivel = int(float(fake))
+        except ValueError:
+            nivel = -60
+        return [f"aud=cam:{nivel}:{1 if nivel >= AUDIO_LOUD else 0}", f"db={nivel}|cam"]
+    partes, lidos = [], []
+    for src, v in audio_state_all().items():
+        if v["db"] is not None:
+            partes.append(f"{src}:{v['db']}:{v['loud']}")
+            lidos.append((v["db"], src))
+    if not partes:
+        return ["aud=x", "db=x|cam"]
+    lidos.sort(reverse=True)
+    return ["aud=" + ",".join(partes), f"db={lidos[0][0]}|{lidos[0][1]}"]
+
+
 def screen_feed():
     st = stats()
     nw = network()
@@ -836,8 +1069,9 @@ def screen_feed():
             lines.append("pcn=" + cn)
     else:
         lines.append("p=off")
-    for src in ("cam", "cam2", "samsung"):
+    for src in cam_list():
         lines.append(f"c={src}")
+    lines.extend(audio_feed_lines())
     return ("\n".join(lines) + "\n").encode()
 
 
@@ -867,6 +1101,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _cam_stream(self, src, w, h):
+        """Manda quadro cru (rgb24) continuamente na mesma conexao.
+
+        O painel lia um wget por quadro: fork+exec 15x/s naquele ARM fraco, com
+        falhas e ~5 fps. Aqui ele abre um socket e recebe o quadro mais novo.
+        """
+        key = (src, w, h)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        cam_live_start(src, w, h)
+        last = 0.0
+        started = time.time()
+        try:
+            while True:
+                _camwant[key] = time.time()
+                with _camlive_lock:
+                    buf = _camlive.get(key)
+                    ts = _camlive_ts.get(key, 0)
+                if buf and ts > last:
+                    self.wfile.write(buf)
+                    self.wfile.flush()
+                    last = ts
+                elif time.time() - max(last, started) > 15:
+                    break
+                time.sleep(0.008)
+        except Exception:
+            pass
 
     def _file(self, name):
         path = os.path.join(STATIC, name)
@@ -905,6 +1170,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._file(p.lstrip("/"))
             elif p == "/stats":
                 self._json(stats())
+            elif p == "/alerts.json":
+                self._json(alerts() or {"ts": time.time(), "ok": True, "alerts": []})
             elif p == "/history":
                 with _lock:
                     self._json({k: list(HIST[k]) for k in HIST})
@@ -918,8 +1185,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(weather())
             elif p == "/weather.txt":
                 self._raw(weather_feed(), "text/plain; charset=utf-8")
+            elif p == "/api/audio":
+                self._json({"ts": time.time(), "srcs": audio_state_all()})
             elif p.startswith("/cam/"):
                 src = p[5:].split(".")[0] or "cam"
+                ext = p.rsplit(".", 1)[-1] if "." in p else ""
                 q = self.path.split("?")[1] if "?" in self.path else ""
                 w = h = None
                 for kv in q.split("&"):
@@ -929,7 +1199,10 @@ class Handler(BaseHTTPRequestHandler):
                         h = int(kv[2:])
                 w = w or 136
                 h = h or 76
-                self._raw(cam_rgb(src, w, h))
+                if ext == "raw":
+                    self._cam_stream(src, w, h)      # fluxo continuo, uma conexao
+                else:
+                    self._raw(cam_rgb(src, w, h))
             elif p == "/all":
                 self._json({"stats": stats(), "network": network()})
             else:
@@ -959,6 +1232,7 @@ if __name__ == "__main__":
     threading.Thread(target=sampler, daemon=True).start()
     threading.Thread(target=pc_link, daemon=True).start()
     start_cam_workers()
+    start_audio_workers()
     threading.Thread(target=docker_stats_loop, daemon=True).start()
     threading.Thread(target=_run_scan, daemon=True).start()
     threading.Thread(target=lambda: [(_run_scan(), time.sleep(25)) for _ in iter(int, 1)], daemon=True).start()

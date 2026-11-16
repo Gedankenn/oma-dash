@@ -178,8 +178,24 @@ let lastAlive = null;
 let devAll = false;
 const stateCache = {};
 
+function renderAlerts(al) {
+  const bar = $("#alertBar");
+  if (!bar) return;
+  const list = (al && al.alerts) || [];
+  if (!list.length) { bar.hidden = true; bar.innerHTML = ""; bar.className = "alertbar"; return; }
+  const crit = list.filter((a) => a.level === "crit").length;
+  bar.hidden = false;
+  bar.className = "alertbar" + (crit ? " crit" : "");
+  bar.innerHTML = "";
+  bar.appendChild(el("b", "alertbar-h",
+    crit ? list.length + " ALERTA (S) · " + crit + " CRÍTICO (S)" : list.length + " AVISO (S)"));
+  list.slice(0, 6).forEach((a) => bar.appendChild(el("span", "alertbar-i", a.text)));
+  if (list.length > 6) bar.appendChild(el("span", "alertbar-i", "+" + (list.length - 6) + " …"));
+}
+
 function renderStats(d) {
   if (!d) return;
+  renderAlerts(d.alerts);
   $("#cpuVal").textContent = Math.round(d.cpu);
   $("#coresLabel").textContent = (d.cpu_cores || "?") + " THREADS · LOAD " + (d.load || []).map((v) => v.toFixed(2)).join(" ");
 

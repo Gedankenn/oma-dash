@@ -1,0 +1,6 @@
+[Unit]
+Description=Alertas de armazenamento do oma-dash (raid, mount, smart, espaco)
+
+[Service]
+Type=oneshot
+ExecStart=/home/server/dash/watch-health.py

@@ -12,6 +12,11 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <linux/input.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include "font_aa.h"
 #include "num_aa.h"   /* Manrope 800, tabular: the big numbers */
 
@@ -213,6 +218,9 @@ struct data {
     float dh_t;                    /* maior temperatura entre os discos */
     char dh_bad[8];                /* dispositivo com falha, se houver */
     int dsk, dsk2;                 /* uso de / e /data, % */
+    int audio_db;                  /* nivel do audio da camera, dBFS */
+    int audio_ok;                  /* 1 = leitura valida */
+    char audio_src[8];             /* de qual camera vem o audio */
     unsigned short hrx[64], htx[64]; int hnet;
     int pcf[5], pcgf, pcu;
     char pcgn[24];                 /* nome da GPU dedicada, ex. "RX 5600 XT" */
@@ -230,8 +238,14 @@ static unsigned char matrix_alive[255];
 static unsigned char *cambuf[4];
 static int camok[4];
 static int cam_zoom = -1;
+#define DB_LOUD (-28)   /* acima disso o audio conta como alto (dBFS) */
 static time_t cam_enter_sec = 0;
 static const char *CAMSRC[4] = {"cam", "samsung", "cam3", "cam4"};
+/* lista real de cameras vem do statsd (linhas "c=<src>"); sem ela, usa as 4 fixas */
+static char camsrc[4][16];
+static int ncam = 0;
+static const char *csrc(int i) { return (i < ncam) ? camsrc[i] : csrc(i); }
+static int nslots(void) { return ncam ? ncam : 4; }
 
 static char *fetch(const char *url, int timeout, char *buf, size_t sz) {
     char cmd[256];
@@ -648,6 +662,7 @@ static void parse_feed(struct data *d, const char *s) {
     d->vn = 0;
     d->online = 1;
     memset(matrix_alive, 0, sizeof matrix_alive);
+    ncam = 0;                 /* a lista de cameras e recalculada a cada feed */
     while (*p) {
         const char *e = strchr(p, '\n');
         size_t n = e ? (size_t)(e - p) : strlen(p);
@@ -670,6 +685,19 @@ static void parse_feed(struct data *d, const char *s) {
             snprintf(d->dh_bad, sizeof d->dh_bad, "%s", bad);
         }
         else if (!strncmp(line, "gname=", 6)) feed_name(d->gname, sizeof d->gname, line + 6);
+        else if (!strncmp(line, "db=", 3)) {
+            char src[8] = "";
+            d->audio_ok = (line[3] != 'x');
+            sscanf(line + 3, "%d|%7s", &d->audio_db, src);
+            snprintf(d->audio_src, sizeof d->audio_src, "%s", src);
+        }
+        else if (!strncmp(line, "c=", 2)) {
+            if (ncam < 4) {
+                int dup = 0;
+                for (int k = 0; k < ncam; k++) if (!strcmp(camsrc[k], line + 2)) dup = 1;
+                if (!dup) snprintf(camsrc[ncam++], sizeof camsrc[0], "%s", line + 2);
+            }
+        }
         else if (!strncmp(line, "dock=", 5)) sscanf(line + 5, "%d|%d", &d->dockN, &d->dockU);
         else if (!strncmp(line, "alive=", 6)) sscanf(line + 6, "%d|%d", &d->alive, &d->total);
         else if (!strncmp(line, "d=", 2) && d->dn < MAXD) {
@@ -758,21 +786,124 @@ static void collect(struct data *d) {
     parse_feed(d, buf);
 }
 
+/* ---------------- fluxo continuo de video ----------------
+   Antes: um wget por quadro (fork+exec 15x/s neste ARM fraco) -> ~5 fps e
+   falhas. Agora: um socket por camera recebendo quadro cru rgb24 sem parar.
+   Se o socket falhar, cai no wget antigo (launch_cams/load_cams).           */
+static int camfd[4] = {-1, -1, -1, -1};
+static unsigned char *camrx[4];
+static int camrxlen[4];
+static char camhdrbuf[4][512];
+static int camhdrlen[4];
+static int camhdr_done[4];
+static time_t camlast[4];
+
+static void cam_close(int i) {
+    if (camfd[i] >= 0) { close(camfd[i]); camfd[i] = -1; }
+    camhdr_done[i] = 0;
+    camhdrlen[i] = 0;
+    camrxlen[i] = 0;
+}
+
+static void cam_open(int i) {
+    cam_close(i);
+    if (!camrx[i]) camrx[i] = malloc(CW * CH * 3);
+    if (!camrx[i]) return;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(1985);
+    inet_pton(AF_INET, "192.168.5.245", &sa.sin_addr);
+    struct timeval tv = {2, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return; }
+    char req[220];
+    snprintf(req, sizeof req,
+             "GET /cam/%s.raw?w=%d&h=%d HTTP/1.0\r\nHost: 192.168.5.245\r\n\r\n",
+             csrc(i), CW, CH);
+    if (write(fd, req, strlen(req)) < 0) { close(fd); return; }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    camfd[i] = fd;
+    camhdr_done[i] = 0;
+    camhdrlen[i] = 0;
+    camrxlen[i] = 0;
+    camlast[i] = time(NULL);
+}
+
+static void cam_pump(void) {
+    int need = CW * CH * 3;
+    int now = (int)time(NULL);
+    for (int i = 0; i < nslots(); i++) {
+        if (camfd[i] < 0) {
+            if (now - camlast[i] >= 3) cam_open(i);   /* tenta de novo a cada 3 s */
+            if (camfd[i] < 0) {
+                if (camok[i] && now - camlast[i] > 20) camok[i] = 0;
+                continue;
+            }
+        }
+        if (!camhdr_done[i]) {
+            int r = read(camfd[i], camhdrbuf[i] + camhdrlen[i],
+                         sizeof camhdrbuf[i] - 1 - camhdrlen[i]);
+            if (r > 0) {
+                camhdrlen[i] += r;
+                camhdrbuf[i][camhdrlen[i]] = 0;
+                char *e = strstr(camhdrbuf[i], "\r\n\r\n");
+                if (e) {
+                    e += 4;
+                    int left = camhdrlen[i] - (int)(e - camhdrbuf[i]);
+                    camhdr_done[i] = 1;
+                    camhdrlen[i] = 0;
+                    if (left > 0 && left <= need) { memcpy(camrx[i], e, left); camrxlen[i] = left; }
+                } else if (camhdrlen[i] >= (int)sizeof camhdrbuf[i] - 1) {
+                    cam_close(i);
+                    continue;
+                }
+            } else if (r == 0) {
+                cam_close(i);
+                continue;
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                cam_close(i);
+                continue;
+            }
+        }
+        if (!camhdr_done[i]) continue;
+        int guard = 0;
+        while (camrxlen[i] < need && guard++ < 64) {
+            int r = read(camfd[i], camrx[i] + camrxlen[i], need - camrxlen[i]);
+            if (r > 0) { camrxlen[i] += r; continue; }
+            if (r == 0) { cam_close(i); break; }
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) break;
+            cam_close(i);
+            break;
+        }
+        if (camfd[i] >= 0 && camrxlen[i] >= need) {
+            memcpy(cambuf[i], camrx[i], need);
+            camok[i] = 1;
+            camlast[i] = now;
+            camrxlen[i] = 0;
+        }
+    }
+}
+
 static void launch_cams(void) {
     char cmd[320];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < nslots(); i++) {
         snprintf(cmd, sizeof cmd,
                  "(wget -q -T 5 -O /tmp/cam%d.tmp '%s/cam/%s.rgb?w=%d&h=%d' && mv /tmp/cam%d.tmp /tmp/cam%d.rgb || rm -f /tmp/cam%d.tmp) &",
-                 i, API, CAMSRC[i], CW, CH, i, i, i);
+                 i, API, csrc(i), CW, CH, i, i, i);
         system(cmd);
     }
 }
 
 static void load_cams(void) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < nslots(); i++) {
         char path[32];
         snprintf(path, sizeof path, "/tmp/cam%d.rgb", i);
         struct stat stt;
+        if (camfd[i] >= 0) continue;              /* socket esta entregando */
         camok[i] = 0;
         if (stat(path, &stt) != 0 || time(NULL) - stt.st_mtime > 20) continue;
         FILE *f = fopen(path, "rb");
@@ -1091,7 +1222,7 @@ static void draw_header(struct data *d, int t) {
     txt(73 + jit, 5, "DASH", 245, 250, 255, &AA_FACE_16);
     txt_r(W - 14, 6, d->clock, 34, 224, 255, &AA_FACE_11);
     rect(W - 8, 8, 3, 3, d->online ? 125 : 255, d->online ? 255 : 59, d->online ? 94 : 84);
-    line(0, 20, W, 20, 34, 224, 255);
+    line(0, 20, W, 20, 255, 176, 32);
 }
 
 static void draw_rail(int cur, int t) {
@@ -1352,6 +1483,9 @@ static void tab_net(struct data *d, int t) {
 }
 
 static void cam_tile(int i, int *x, int *y, int *w, int *h) {
+    int n = nslots();
+    if (n <= 1) { *x = 62; *y = 40; *w = 412; *h = 192; return; }
+    if (n == 2) { *w = 201; *h = 192; *x = 62 + (i % 2) * 206; *y = 40; return; }
     *w = 201; *h = 91;
     *x = 62 + (i % 2) * 206;
     *y = 40 + (i / 2) * 96;
@@ -1390,12 +1524,18 @@ static void no_signal(int x, int y, int w, int h) {
     txt(x + w / 2 - 27, y + h / 2 - 3, "NO SIGNAL", 255, 59, 84, &AA_FACE_11);
 }
 
-static void tab_cam(int t) {
+static void tab_cam(struct data *d, int t) {
     char b[48];
     if (cam_zoom < 0) {
-        txt(64, 26, "CAMERAS 2X2", 255, 47, 214, &AA_FACE_13);
+        snprintf(b, sizeof b, "%d CAMERA%s", nslots(), nslots() == 1 ? "" : "S");
+        txt(64, 26, b, 255, 47, 214, &AA_FACE_13);
         txt(392, 26, "TAP TO ZOOM", 60, 90, 110, &AA_FACE_11);
-        for (int i = 0; i < 4; i++) {
+        if (d->audio_ok) snprintf(b, sizeof b, "AUDIO %d dB%s", d->audio_db, d->audio_db >= DB_LOUD ? " ALTO" : "");
+        else snprintf(b, sizeof b, "AUDIO -- dB");
+        txt(250, 26, b, (d->audio_ok && d->audio_db >= DB_LOUD) ? 255 : 60,
+            (d->audio_ok && d->audio_db >= DB_LOUD) ? 154 : 90,
+            (d->audio_ok && d->audio_db >= DB_LOUD) ? 0 : 110, &AA_FACE_11);
+        for (int i = 0; i < nslots(); i++) {
             int x, y, w, h;
             cam_tile(i, &x, &y, &w, &h);
             rect(x, y, w, h, 4, 7, 12);
@@ -1403,8 +1543,11 @@ static void tab_cam(int t) {
             if (camok[i]) blit_fit(cambuf[i], CW, CH, x, y, w, h);
             else if (cam_enter_sec && time(NULL) - cam_enter_sec < 15 && i < 2) loading_box(x, y, w, h, t);
             else no_signal(x, y, w, h);
+            if (d->audio_ok && d->audio_db >= DB_LOUD &&
+                (!d->audio_src[0] || !strcmp(d->audio_src, csrc(i))))
+                for (int k = 0; k < 3; k++) frame_rect(x - k, y - k, w + 2 * k, h + 2 * k, 255, 154, 0);
             rect(x, y, w, 12, 5, 8, 14);
-            txt(x + 4, y + 3, CAMSRC[i], 255, 47, 214, &AA_FACE_11);
+            txt(x + 4, y + 3, csrc(i), 255, 47, 214, &AA_FACE_11);
             txt(x + w - 26, y + 3, camok[i] ? "ON" : "OFF",
                  camok[i] ? 125 : 255, camok[i] ? 255 : 59, camok[i] ? 94 : 84, &AA_FACE_11);
         }
@@ -1416,8 +1559,11 @@ static void tab_cam(int t) {
         if (camok[i]) blit_fit(cambuf[i], CW, CH, x, y, w, h);
         else if (cam_enter_sec && time(NULL) - cam_enter_sec < 15) loading_box(x, y, w, h, t);
         else no_signal(x, y, w, h);
+        if (d->audio_ok && d->audio_db >= DB_LOUD &&
+            (!d->audio_src[0] || !strcmp(d->audio_src, csrc(i))))
+            for (int k = 0; k < 4; k++) frame_rect(x - k, y - k, w + 2 * k, h + 2 * k, 255, 154, 0);
         rect(x, y, w, 14, 5, 8, 14);
-        snprintf(b, sizeof b, "%s  LIVE", CAMSRC[i]);
+        snprintf(b, sizeof b, "%s  LIVE", csrc(i));
         txt(x + 4, y + 4, b, 255, 47, 214, &AA_FACE_11);
         txt(x + w - 70, y + 4, "TAP=CLOSE", 34, 224, 255, &AA_FACE_11);
     }
@@ -1436,7 +1582,7 @@ static void render(struct data *d, struct wx *w, int cur, int t) {
     case 1: tab_pc(d, t); break;
     case 2: tab_dock(d); break;
     case 3: tab_net(d, t); break;
-    case 4: tab_cam(t); break;
+    case 4: tab_cam(d, t); break;
     case 5: tab_wx(w, t); break;
     }
 
@@ -1483,7 +1629,10 @@ int main(int argc, char **argv) {
         if (fb == MAP_FAILED) { perror("mmap"); return 1; }
     }
 
-    for (int i = 0; i < 4; i++) cambuf[i] = malloc(CW * CH * 3);
+    for (int i = 0; i < 4; i++) {
+        cambuf[i] = malloc(CW * CH * 3);
+        camrx[i] = malloc(CW * CH * 3);
+    }
 
     touch_open();
     cal_load();
@@ -1538,6 +1687,8 @@ int main(int argc, char **argv) {
         if (cur != 4) cam_enter_sec = 0;
         struct timespec tb0;
         if (bench && t == 0) clock_gettime(CLOCK_MONOTONIC, &tb0);
+        /* carrega os quadros antes de desenhar: evita o primeiro frame em LOADING */
+        if (cur == 4 && !(camok[0] && camok[1])) load_cams();
         render(&d, &w, cur, t);
         if (bench && t == bench - 1) {
             struct timespec tb1;
@@ -1563,8 +1714,14 @@ int main(int argc, char **argv) {
             printf("%d frames: %.2f ms/frame (%.0f fps), tab %d\n", bench, ms, 1000.0 / ms, cur);
             return 0;
         }
-        if (cur == 4 && t - last_cam > 240) { launch_cams(); last_cam = t; }
-        if (cur == 4 && t % 60 == 0) load_cams();
+        if (cur == 4) {
+            cam_pump();
+            /* reserva: so baixa por wget se o socket nao entregou nada */
+            if (!(camok[0] && camok[1]) && t - last_cam > 15) { launch_cams(); last_cam = t; }
+            if (t % 30 == 0) load_cams();
+        } else {
+            for (int i = 0; i < 4; i++) cam_close(i);
+        }
         if (ppmout) {
             FILE *pf = fopen(ppmout, "wb");
             if (pf) {

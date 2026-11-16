@@ -1,5 +1,5 @@
 [Unit]
-Description=OMA//DASH telemetry API and dashboard
+Description=OMA dash stats API
 After=network-online.target
 
 [Service]

@@ -1,11 +1,20 @@
 __pycache__/
 *.pyc
-fbdash
 state.json
+alerts.json
+disks.json
 *.log
-font_aa.h
-num_aa.h
+*.ppm
+
+# binarios gerados
 fbdash
 fbdash.host
-*.ppm
 tools/bake_font
+
+# copias manuais e artefatos de sistema
+*.bak
+*.bak-*
+backups/
+
+# font_aa.h e num_aa.h SAO versionados de proposito: o Makefile compila direto
+# do fbdash.c e precisa deles. tools/build.sh regera quando a fonte/size mudar.
