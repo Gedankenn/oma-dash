@@ -13,6 +13,7 @@ Antes isso era editado a mao e ficava velho. Agora:
 Roda por timer systemd (--user) a cada 15 min. Faz backup antes de escrever e
 so grava se as duas listas continuarem validas.
 """
+import html
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import sys
 import time
 
 HUB = "/home/server/lan-hub/index.html"
+ALERTS = "/home/server/dash/alerts.json"
 CFAPI = "/home/server/.local/bin/cfapi"
 ACCT = "08e9fba150dbca457e8addcc51d7d72d"
 TUNNEL = "6b647d9e-42b3-4a95-91e7-589fc3c0ef66"
@@ -204,6 +206,66 @@ def fmt_cf(itens):
     return "[\n" + ",\n".join(linhas) + "\n  ]"
 
 
+ALERTA_INI = "<!-- ALERTAS:inicio -->"
+ALERTA_FIM = "<!-- ALERTAS:fim -->"
+
+
+def banner_alertas():
+    """Faixa de alerta do oma-dash no topo do hub.
+
+    O hub e a primeira pagina que o dono abre na LAN, entao o alerta de
+    armazenamento aparece aqui tambem (o dash :1985 e o painel do iDBox ja
+    mostram). Lido do alerts.json que o watch-health.py grava a cada 5 min;
+    o hub e regerado a cada 15 min, entao a defasagem maxima e isso.
+    """
+    try:
+        with open(ALERTS) as f:
+            al = (json.load(f) or {}).get("alerts") or []
+    except Exception:
+        return ""
+    if not al:
+        return ""
+    crit = [a for a in al if a.get("level") == "crit"]
+    cor = ("#ff3b54", "#2a0b12") if crit else ("#ffb020", "#2a1f06")
+    titulo = ("%d ALERTA (S) · %d CRITICO (S)" % (len(al), len(crit)) if crit
+              else "%d AVISO (S)" % len(al))
+    itens = "".join(
+        '<li>%s</li>' % html.escape(str(a.get("text") or ""))[:160] for a in al[:5])
+    resto = ('<li>+%d ...</li>' % (len(al) - 5)) if len(al) > 5 else ""
+    return (
+        ALERTA_INI + "\n"
+        "<style>"
+        ".hubalert{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;"
+        "margin:0 0 14px;padding:10px 14px;border:1px solid %s;border-radius:8px;"
+        "background:%s;color:#fff;font-size:13px;line-height:1.45}"
+        ".hubalert b{letter-spacing:.14em;font-size:11px;color:%s;text-transform:uppercase}"
+        ".hubalert ul{margin:0;padding-left:18px}"
+        "</style>\n"
+        '<div class="hubalert"><b>%s</b><ul>%s%s</ul></div>\n'
+        % (cor[0], cor[1], cor[0], html.escape(titulo), itens, resto)
+        + ALERTA_FIM + "\n")
+
+
+def aplica_alertas(s):
+    """Troca (ou remove) o bloco de alertas, sem tocar no resto do HTML."""
+    novo = banner_alertas()
+    ini = s.find(ALERTA_INI)
+    if ini >= 0:
+        fim = s.find(ALERTA_FIM, ini)
+        if fim < 0:
+            return s
+        fim += len(ALERTA_FIM) + 1
+        return s[:ini] + novo + s[fim:]
+    if not novo:
+        return s
+    # primeira vez: entra logo depois do </header> (antes do <main>)
+    pos = s.find("</header>")
+    if pos < 0:
+        return s
+    pos = s.find(">", pos) + 1
+    return s[:pos] + "\n" + novo + s[pos:]
+
+
 def main():
     if not os.path.exists(HUB):
         print("hub nao encontrado:", HUB)
@@ -221,6 +283,7 @@ def main():
     novo = s[:r1[0]] + fmt_servicos(serv) + s[r1[1]:]
     r2b = bloco(novo, "CF")
     novo = novo[:r2b[0]] + fmt_cf(cf) + novo[r2b[1]:]
+    novo = aplica_alertas(novo)
 
     if novo == s:
         print("sem mudanca (%d servicos, %d publicos)" % (len(serv), len(cf)))
