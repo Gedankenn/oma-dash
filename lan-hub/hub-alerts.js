@@ -2,7 +2,7 @@
    Nada de alerta escrito no HTML: o sync.py so deixa o <div id="hubAlert"> vazio. */
 (function () {
   "use strict";
-  var API = "http://192.168.5.245:1985/api/alerts";
+  var API = location.protocol + "//" + location.hostname + ":1985/api/alerts";
   var CSS = ''
     + '.hubalert{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;'
     + 'margin:0 0 14px;padding:10px 14px;border:1px solid #ffb020;border-radius:8px;'
