@@ -393,7 +393,10 @@ function renderStats(d) {
   $("#dockTag").textContent = upN + "/" + dk2.length + " UP";
   const dl = $("#dockerList");
   dl.innerHTML = "";
-  dk2.slice(0, 24).forEach((c) => {
+  // lista completa (antes cortava em 24 e a ultima linha aparecia pela metade):
+  // roda primeiro, depois parados; a caixa rola com barra visivel
+  dk2.slice().sort((a, b) => ((b.up ? 1 : 0) - (a.up ? 1 : 0)) || a.name.localeCompare(b.name))
+    .forEach((c) => {
     const r = el("div", "row ct");
     r.appendChild(el("span", "n", c.name));
     const v = el("span", "v" + (c.up ? " ok" : " bad"), c.up ? "UP" : "OFF");

@@ -157,6 +157,10 @@ body{
   border-radius:99px; transition:width .5s ease}
 
 .rows{display:flex; flex-direction:column; gap:1px; flex:1 1 auto; justify-content:flex-start; min-height:0; overflow:auto; padding-bottom:6px;
+  scrollbar-width:thin; scrollbar-color:var(--line2) transparent}
+.rows::-webkit-scrollbar{width:6px;height:6px}
+.rows::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+.rows::-webkit-scrollbar-track{background:transparent}
   -webkit-mask-image:linear-gradient(#000 calc(100% - 14px), transparent); mask-image:linear-gradient(#000 calc(100% - 14px), transparent)}
 .rows .row{
   display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center;
@@ -499,10 +503,10 @@ h1, h2, .hdr, .clock{
 .a-sto .card-h{margin-bottom:4px}
 .syncbox{margin-top:3px;padding-top:5px;border-top:1px solid var(--line)}
 .sync-h{display:flex;align-items:baseline;gap:7px;font-size:8.5px;letter-spacing:1.1px;
-  color:var(--mute);text-transform:uppercase;line-height:1.1;white-space:nowrap;overflow:hidden}
+  color:var(--mute);text-transform:uppercase;line-height:1.15;white-space:normal;flex-wrap:wrap}
 .sync-h b{color:var(--lime);font-size:10px;letter-spacing:.05em;font-variant-numeric:tabular-nums}
 .sync-h em{font-style:normal;margin-left:auto;font-size:8.5px;letter-spacing:.04em;color:var(--mute);
-  overflow:hidden;text-overflow:ellipsis}
+  white-space:normal;overflow:visible;text-overflow:clip;flex:1 1 100%;text-align:right}
 .syncbox .meter{height:4px;margin:3px 0 0}
 .syncbox.erro .sync-h b{color:var(--red)}
 

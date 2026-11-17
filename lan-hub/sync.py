@@ -40,6 +40,7 @@ META = {
     1985: ("OMA // DASH", "console do servidor", False),
     20211: ("OMA // NET", "dispositivos · presença", False),
     8085: ("PERÍCIAS", "casos · laudos · autos", False),
+    8100: ("memory API", "memória do time", False),
 }
 ORDEM = [8096, 1985, 1984, 20211, 8085, 8081, 8082, 8083, 8008, 8097, 8006]
 # portas que nunca entram na lista (o proprio hub, ssh, bancos, relay interno)

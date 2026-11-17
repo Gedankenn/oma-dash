@@ -18,3 +18,8 @@ backups/
 
 # font_aa.h e num_aa.h SAO versionados de proposito: o Makefile compila direto
 # do fbdash.c e precisa deles. tools/build.sh regera quando a fonte/size mudar.
+
+# runtime do hub (gerado pelo cf-probe.py e pelo hubstats)
+lan-hub/cf.json
+lan-hub/cf-history.json
+lan-hub/stats.json
