@@ -3,6 +3,7 @@
 import ipaddress
 import json
 import os
+import ssl
 import re
 import socket
 import subprocess
@@ -372,6 +373,10 @@ def snapraid_action(action, ip=""):
 
 ALERTS_FILE = "/home/server/dash/alerts.json"
 NETWATCH_FILE = "/home/server/netwatch/alerts.jsonl"
+SERVICES_JSON = "/home/server/services.json"          # catalogo unico (tools/catalogo.py)
+SERVICES_STATE = "/home/server/dash/services-state.json"
+SERVICES_PERIOD = 300                                # s entre sondagens (5 min)
+LAN_IP = os.environ.get("DASH_LAN_IP", "192.168.5.245")
 NETWATCH_WINDOW = 6 * 3600          # s: so o que e recente vira alerta de tela
 
 
@@ -412,6 +417,123 @@ def netwatch_alerts(now=None, window=NETWATCH_WINDOW):
     return list(ultimo.values())
 
 
+def _probe_opener():
+    """Abre URL sem seguir redirect: o catalogo espera o codigo cru (302/303)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE              # gtavc-web usa certificado proprio
+
+    class _SemRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    return urllib.request.build_opener(_SemRedirect,
+                                       urllib.request.HTTPSHandler(context=ctx))
+
+
+def _probe_code(opener, url):
+    try:
+        with opener.open(urllib.request.Request(url, headers={"User-Agent": "oma-dash-probe/1"}),
+                         timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code                          # 401 do cams, 302 do jellyfin etc.
+    except Exception:
+        return 0                               # sem resposta
+
+
+def probe_services(catalogo=SERVICES_JSON, estado=SERVICES_STATE):
+    """Sonda cada servico catalogado e conta falhas consecutivas.
+
+    Regra do url_local: tenta o endereco como esta (o proprio servidor roda o
+    dash, entao 127.0.0.1 vale); se falhar e for loopback, tenta de novo pelo
+    IP da LAN. O stellacorp so escuta em loopback — trocar sempre pelo IP daria
+    falso positivo.
+    """
+    try:
+        with open(catalogo) as f:
+            servicos = (json.load(f) or {}).get("servicos") or []
+    except Exception:
+        return None
+    try:
+        with open(estado) as f:
+            antes = (json.load(f) or {}).get("probes") or {}
+    except Exception:
+        antes = {}
+    opener = _probe_opener()
+    agora = int(time.time())
+    probes = {}
+    for s in servicos:
+        ident = (s.get("id") or "").strip()
+        url = (s.get("url_local") or "").strip()
+        if not ident or not url:
+            continue
+        esperado = int(s.get("http") or 200)
+        code = _probe_code(opener, url)
+        if code != esperado and "127.0.0.1" in url:
+            code = _probe_code(opener, url.replace("127.0.0.1", LAN_IP))
+        ok = code == esperado
+        fails = 0 if ok else int((antes.get(ident) or {}).get("fails") or 0) + 1
+        probes[ident] = {"nome": s.get("nome") or ident, "url": url,
+                         "esperado": esperado, "code": code, "ok": ok,
+                         "fails": fails, "publico": (s.get("publico") or "").strip(),
+                         "checked": agora}
+    dados = {"ts": agora, "probes": probes}
+    try:
+        tmp = estado + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(dados, f)
+        os.replace(tmp, estado)
+    except Exception:
+        pass
+    return dados
+
+
+def services_alerts(now=None, estado=SERVICES_STATE):
+    """Achados da fonte `services`.
+
+    2 falhas seguidas = warn; 3+ ou servico com hostname publico = crit.
+    Quando o servico responde de novo o contador zera e o achado desaparece
+    (mesma semantica dos outros: sem estado "resolvido", some da lista).
+    """
+    try:
+        with open(estado) as f:
+            dados = json.load(f) or {}
+    except Exception:
+        return []
+    out = []
+    for ident, p in (dados.get("probes") or {}).items():
+        fails = int(p.get("fails") or 0)
+        if fails < 2:
+            continue
+        publico = bool(p.get("publico"))
+        crit = fails >= 3 or publico
+        detalhe = "sem resposta" if not p.get("code") else "HTTP %s" % p.get("code")
+        complemento = ""
+        if publico:
+            complemento = " · publicado (%s)" % p["publico"].split(" + ")[0]
+        out.append({
+            "id": "svc:" + ident,
+            "src": "services",
+            "level": "crit" if crit else "warn",
+            "text": "%s fora do ar: %s (esperado %s)%s" % (
+                p.get("nome") or ident, detalhe, p.get("esperado"), complemento),
+            "ts": dados.get("ts") or int(now or time.time()),
+            "fails": fails,
+            "banner": True,
+        })
+    return out
+
+
+def _services_loop():
+    while True:
+        try:
+            probe_services()
+        except Exception as e:
+            print("services probe:", e, flush=True)
+        time.sleep(SERVICES_PERIOD)
+
+
 def alerts_banner(include_hidden=False, now=None):
     """Feed do banner e da API /api/alerts — fonte unica, nada escrito em HTML.
 
@@ -428,13 +550,14 @@ def alerts_banner(include_hidden=False, now=None):
                       "level": a.get("level") or "warn",
                       "text": a.get("text") or "", "ts": bruto.get("ts")})
     itens += netwatch_alerts(now)
+    itens += services_alerts(now)
     return {"ts": int(now), "ok": not itens, "alerts": itens,
             "counts": {lv: sum(1 for a in itens if a["level"] == lv)
                        for lv in ("crit", "warn", "info")}}
 
 
 def api_alerts(qs):
-    """GET /api/alerts — filtros: level=crit,warn  src=netwatch,storage  limit=N  all=1."""
+    """GET /api/alerts — filtros: level=crit,warn  src=storage,netwatch,services  limit=N  all=1."""
     tudo = alerts_banner(include_hidden=qs.get("all") in ("1", "true", "yes"))
     itens = tudo["alerts"]
     niveis = [x.strip() for x in (qs.get("level") or "").split(",") if x.strip()]
@@ -1528,6 +1651,7 @@ if __name__ == "__main__":
     start_cam_workers()
     start_audio_workers()
     threading.Thread(target=docker_stats_loop, daemon=True).start()
+    threading.Thread(target=_services_loop, daemon=True).start()
     threading.Thread(target=_run_scan, daemon=True).start()
     threading.Thread(target=lambda: [(_run_scan(), time.sleep(25)) for _ in iter(int, 1)], daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
