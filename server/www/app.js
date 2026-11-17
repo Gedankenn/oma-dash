@@ -178,9 +178,33 @@ let lastAlive = null;
 let devAll = false;
 const stateCache = {};
 
+function bindSnapraid() {
+  const box = $("#syncBox");
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = "1";
+  const acao = async (qual) => {
+    const botoes = [$("#syncStart"), $("#syncCancel")];
+    botoes.forEach((b) => b && (b.disabled = true));
+    try { await fetch("/api/snapraid/" + qual, { method: "POST" }); } catch (e) {}
+    await refresh();
+    botoes.forEach((b) => b && (b.disabled = false));
+  };
+  const go = $("#syncStart"), stop = $("#syncCancel");
+  if (go) go.addEventListener("click", () => acao("start"));
+  if (stop) stop.addEventListener("click", () => {
+    if (confirm("Cancelar o sync de paridade em andamento?")) acao("cancel");
+  });
+}
+
 function renderSnapraid(sp) {
   const box = $("#syncBox");
   if (!box) return;
+  bindSnapraid();
+  const bIni = $("#syncStart"), bCan = $("#syncCancel");
+  if (bIni && bCan) {
+    bIni.hidden = !!(sp && sp.running);
+    bCan.hidden = !(sp && sp.running);
+  }
   if (!sp || (!sp.running && !sp.state)) { box.hidden = true; return; }
   const pct = sp.pct == null ? 0 : Math.max(0, Math.min(100, sp.pct));
   const bar = $("#syncBar"), lab = $("#syncPct"), sub = $("#syncSub");
@@ -195,6 +219,12 @@ function renderSnapraid(sp) {
   } else if (sp.state === "ok") {
     texto = "OK"; cls = "ok"; largura = 100;
     sub.textContent = sp.updated ? "concluído " + new Date(sp.updated * 1000).toLocaleString("pt-BR", {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "concluído";
+  } else if (sp.state === "cancelled") {
+    texto = "PARADO";
+    cls = "warn";
+    largura = pct;
+    const m = /cancelado ([0-9T:+-]+)/.exec(sp.line || "");
+    sub.textContent = m ? "cancelado " + new Date(m[1]).toLocaleTimeString("pt-BR", {hour:"2-digit",minute:"2-digit"}) : "cancelado";
   } else if (sp.state === "error") {
     texto = "FALHOU"; cls = "bad"; largura = 0;
     sub.textContent = sp.line || "snapraid retornou erro";
@@ -206,7 +236,9 @@ function renderSnapraid(sp) {
   bar.style.width = largura + "%";
   bar.style.background = cls === "bad"
     ? "linear-gradient(90deg,#ff3b54,#ff8a9b)"
-    : "linear-gradient(90deg,#9cff4a,#d6ff9e)";
+    : cls === "warn"
+      ? "linear-gradient(90deg,#ffb020,#ffd27a)"
+      : "linear-gradient(90deg,#9cff4a,#d6ff9e)";
 }
 
 function renderAlerts(al) {

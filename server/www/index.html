@@ -87,7 +87,12 @@
   </section>
 
   <section class="card a-sto">
-    <div class="card-h"><h2>STORAGE</h2></div>
+    <div class="card-h"><h2>STORAGE</h2>
+      <span class="sync-ctl">
+        <button class="sync-btn" id="syncStart" type="button" title="iniciar o sync de paridade">iniciar</button>
+        <button class="sync-btn danger" id="syncCancel" type="button" title="cancelar o sync de paridade">cancelar</button>
+      </span>
+    </div>
     <div class="rows" id="diskList"></div>
     <div class="syncbox" id="syncBox" hidden>
       <div class="sync-h"><span>paridade · sync</span><b id="syncPct">--</b><em id="syncSub">—</em></div>

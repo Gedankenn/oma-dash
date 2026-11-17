@@ -505,3 +505,14 @@ h1, h2, .hdr, .clock{
   overflow:hidden;text-overflow:ellipsis}
 .syncbox .meter{height:4px;margin:3px 0 0}
 .syncbox.erro .sync-h b{color:var(--red)}
+
+/* botoes de controle do sync de paridade */
+.sync-ctl{margin-left:auto;display:flex;gap:4px;align-items:center}
+.sync-btn{font:600 8.5px/1 var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase;
+  padding:4px 7px;min-height:18px;background:transparent;border:1px solid var(--line2);
+  color:var(--dim);border-radius:2px;cursor:pointer;transition:border-color .15s ease,color .15s ease}
+.sync-btn:hover{border-color:var(--cyan);color:var(--ink)}
+.sync-btn:disabled{opacity:.4;cursor:default}
+.sync-btn.danger{color:var(--red);border-color:rgba(255,59,84,.45)}
+.sync-btn.danger:hover{border-color:var(--red);color:#fff}
+.sync-btn[hidden]{display:none}

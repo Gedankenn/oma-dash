@@ -322,11 +322,11 @@ def snapraid():
             if not pid.isdigit():
                 continue
             try:
-                with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                    cmd = fh.read().decode("utf-8", "replace")
+                with open(f"/proc/{pid}/comm") as fh:
+                    nome = fh.read().strip()
             except OSError:
                 continue
-            if "snapraid" in cmd and "sync" in cmd:
+            if nome == "snapraid":          # nome exato: nao confunde shell com o comando
                 rodando = True
                 break
     except OSError:
@@ -336,7 +336,11 @@ def snapraid():
         info["state"] = "syncing"
     else:
         ultimas = linhas[-40:]
-        if any("fim 0" in ln for ln in ultimas) or any("Everything is OK" in ln for ln in ultimas):
+        corte_cancel = max((i for i, ln in enumerate(ultimas) if ln.startswith("cancelado")), default=-1)
+        corte_fim = max((i for i, ln in enumerate(ultimas) if ln.startswith("fim ")), default=-1)
+        if corte_cancel > corte_fim:
+            info["state"] = "cancelled"
+        elif any("fim 0" in ln for ln in ultimas) or any("Everything is OK" in ln for ln in ultimas):
             info["state"] = "ok"
             info["pct"] = 100 if info["pct"] is not None else None
         elif any(ln.startswith("fim ") for ln in ultimas):
@@ -347,7 +351,28 @@ def snapraid():
     return info
 
 
+SNAPRAID_CTL = "/home/server/dash/snapraid-ctl.sh"
+
+
+def snapraid_action(action, ip=""):
+    """start/cancel do sync de paridade. Comando fixo no helper; nada livre vem da web."""
+    try:
+        out = subprocess.run([SNAPRAID_CTL, action], capture_output=True, text=True, timeout=25)
+    except Exception as exc:                      # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:200]}
+    detalhe = ((out.stdout or "") + (out.stderr or "")).strip()[:200]
+    try:
+        with open("/home/server/dash/actions.log", "a") as fh:
+            fh.write("%s %s snapraid %s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), ip, action, detalhe))
+    except OSError:
+        pass
+    _snap_cache.update(ts=0.0, data=None)
+    return {"ok": out.returncode == 0, "action": action, "detail": detalhe}
+
+
 ALERTS_FILE = "/home/server/dash/alerts.json"
+NETWATCH_FILE = "/home/server/netwatch/alerts.jsonl"
+NETWATCH_WINDOW = 6 * 3600          # s: so o que e recente vira alerta de tela
 
 
 def alerts():
@@ -357,6 +382,75 @@ def alerts():
             return json.load(f)
     except Exception:
         return None
+
+
+def netwatch_alerts(now=None, window=NETWATCH_WINDOW):
+    """Sensor netwatch (ARP/portas/UFW): so high/critical recentes entram.
+
+    Um alerta de 3 dias atras no banner e ruido; aqui a janela e curta e cada
+    regra+chave aparece uma vez, com a ocorrencia mais recente.
+    """
+    now = now or time.time()
+    nivel = {"critical": "crit", "high": "warn"}
+    ultimo = {}
+    try:
+        with open(NETWATCH_FILE) as f:
+            for linha in f:
+                try:
+                    a = json.loads(linha)
+                except ValueError:
+                    continue
+                lv = nivel.get(a.get("sev"))
+                if not lv or now - (a.get("ts") or 0) > window:
+                    continue
+                chave = f"{a.get('rule')}:{a.get('key')}"
+                ultimo[chave] = {"id": "netwatch:" + chave, "src": "netwatch",
+                                 "level": lv, "text": a.get("msg") or "",
+                                 "rule": a.get("rule"), "ts": a.get("ts")}
+    except OSError:
+        pass
+    return list(ultimo.values())
+
+
+def alerts_banner(include_hidden=False, now=None):
+    """Feed do banner e da API /api/alerts — fonte unica, nada escrito em HTML.
+
+    Alerta com card proprio (SMART, temperatura) fica fora do banner: o card ja
+    mostra o mesmo fato. include_hidden=True devolve tudo, para diagnostico.
+    """
+    now = now or time.time()
+    bruto = alerts() or {}
+    itens = []
+    for a in bruto.get("alerts") or []:
+        if not include_hidden and (a.get("banner") is False or a.get("card")):
+            continue
+        itens.append({"id": a.get("id"), "src": a.get("src") or "storage",
+                      "level": a.get("level") or "warn",
+                      "text": a.get("text") or "", "ts": bruto.get("ts")})
+    itens += netwatch_alerts(now)
+    return {"ts": int(now), "ok": not itens, "alerts": itens,
+            "counts": {lv: sum(1 for a in itens if a["level"] == lv)
+                       for lv in ("crit", "warn", "info")}}
+
+
+def api_alerts(qs):
+    """GET /api/alerts — filtros: level=crit,warn  src=netwatch,storage  limit=N  all=1."""
+    tudo = alerts_banner(include_hidden=qs.get("all") in ("1", "true", "yes"))
+    itens = tudo["alerts"]
+    niveis = [x.strip() for x in (qs.get("level") or "").split(",") if x.strip()]
+    if niveis:
+        itens = [a for a in itens if a["level"] in niveis]
+    fontes = [x.strip() for x in (qs.get("src") or "").split(",") if x.strip()]
+    if fontes:
+        itens = [a for a in itens if a["src"] in fontes]
+    limite = qs.get("limit")
+    if limite and str(limite).isdigit():
+        itens = itens[:int(limite)]
+    return {"ts": tudo["ts"], "ok": not itens,
+            "counts": {lv: sum(1 for a in itens if a["level"] == lv)
+                       for lv in ("crit", "warn", "info")},
+            "sources": sorted({a["src"] for a in itens}),
+            "alerts": itens}
 
 
 def docker_ps():
@@ -577,7 +671,7 @@ def stats():
         "docker": docker_ps(),
         "docker_all": docker_ps_all(),
         "disk_health": disk_health(),
-        "alerts": alerts(),
+        "alerts": alerts_banner(),
         "snapraid": snapraid(),
         "dstats": _cache["dstats"][1],
         "health": health(),
@@ -1214,7 +1308,7 @@ def screen_feed():
              "alt=" + (lambda al: "%d|%d" % (
                  len((al or {}).get("alerts") or []),
                  sum(1 for a in ((al or {}).get("alerts") or []) if a.get("level") == "crit")
-             ))(alerts()),
+             ))(alerts_banner()),
              f"alive={nw.get('alive',0)}|{nw.get('total',254)}"]
     for dev in nw.get("devices", []):
         if dev.get("alive"):
@@ -1248,7 +1342,7 @@ def screen_feed():
         lines.append("p=off")
     # resumo do alerta para o painel do iDBox (fonte bitmap: so ASCII, curto).
     # O painel esta na sala: cobre o caso "o PC do alerta esta desligado".
-    _al = (alerts() or {}).get("alerts") or []
+    _al = (alerts_banner() or {}).get("alerts") or []
     _crit = [a for a in _al if a.get("level") == "crit"] or _al
     if _crit:
         _txt = "".join(ch for ch in str(_crit[0].get("text") or "")
@@ -1355,6 +1449,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._file(p.lstrip("/"))
             elif p == "/stats":
                 self._json(stats())
+            elif p == "/api/alerts":
+                qs = {}
+                if "?" in self.path:
+                    for par in self.path.split("?", 1)[1].split("&"):
+                        if "=" in par:
+                            k, v = par.split("=", 1)
+                            qs[k] = v
+                self._json(api_alerts(qs))
             elif p == "/alerts.json":
                 self._json(alerts() or {"ts": time.time(), "ok": True, "alerts": []})
             elif p == "/history":
@@ -1402,6 +1504,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         p = self.path.split("?")[0]
         try:
+            m = re.match(r"^/api/snapraid/(start|cancel)$", p)
+            if m:
+                res = snapraid_action(m.group(1), self.client_address[0])
+                self._json(res, 200 if res.get("ok") else 409)
+                return
             m = re.match(r"^/api/containers/([^/]+)/(start|stop|restart)$", p)
             if not m:
                 self._json({"ok": False, "error": "not found"}, 404)
