@@ -58,12 +58,19 @@ def summarize(dev, j):
     hours = (j.get("power_on_time") or {}).get("hours")
     temp = (j.get("temperature") or {}).get("current")
     wear = (j.get("nvme_smart_health_information_log") or {}).get("percentage_used")
-    realloc = None
+    realloc = pending = crc = None
     for a in ((j.get("ata_smart_attributes") or {}).get("table") or []):
-        if a.get("id") == 5:
-            realloc = a.get("raw", {}).get("value")
+        aid = a.get("id")
+        raw = a.get("raw", {}).get("value")
+        if aid == 5:
+            realloc = raw
+        elif aid == 197:      # setores pendentes: superficie suspeita
+            pending = raw
+        elif aid == 199:      # CRC UDMA: cabo/contato SATA (nunca zera, olhar a diferenca)
+            crc = raw
     return {"device": dev, "model": model[:28], "ok": bool(passed) if passed is not None else None,
-            "temp": temp, "hours": hours, "wear": wear, "reallocated": realloc}
+            "temp": temp, "hours": hours, "wear": wear, "reallocated": realloc,
+            "pending": pending, "crc": crc}
 
 
 def main():
