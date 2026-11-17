@@ -1305,10 +1305,6 @@ def screen_feed():
                  next((x["device"] for x in (dh.get("disks") or []) if x.get("ok") is False), "")
              ))(disk_health() or {"disks": []}),
              f"dock={len(st['docker'])}|{sum(1 for c in st['docker'] if c['up'])}",
-             "alt=" + (lambda al: "%d|%d" % (
-                 len((al or {}).get("alerts") or []),
-                 sum(1 for a in ((al or {}).get("alerts") or []) if a.get("level") == "crit")
-             ))(alerts_banner()),
              f"alive={nw.get('alive',0)}|{nw.get('total',254)}"]
     for dev in nw.get("devices", []):
         if dev.get("alive"):
@@ -1343,7 +1339,11 @@ def screen_feed():
     # resumo do alerta para o painel do iDBox (fonte bitmap: so ASCII, curto).
     # O painel esta na sala: cobre o caso "o PC do alerta esta desligado".
     _al = (alerts_banner() or {}).get("alerts") or []
-    _crit = [a for a in _al if a.get("level") == "crit"] or _al
+    _crit = [a for a in _al if a.get("level") == "crit"]
+    # contrato com o painel (Devlelino): SEM alerta de banner nenhuma das duas
+    # linhas existe; altx so aparece quando ha critico (e o texto da faixa).
+    if _al:
+        lines.append("alt=%d|%d" % (len(_al), len(_crit)))
     if _crit:
         _txt = "".join(ch for ch in str(_crit[0].get("text") or "")
                        if 32 <= ord(ch) < 127 and ch != "|")[:46]
