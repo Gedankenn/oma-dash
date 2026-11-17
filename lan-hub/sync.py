@@ -40,12 +40,13 @@ META = {
     1985: ("OMA // DASH", "console do servidor", False),
     20211: ("OMA // NET", "dispositivos · presença", False),
     8085: ("PERÍCIAS", "casos · laudos · autos", False),
-    8100: ("memory API", "memória do time", False),
+    8100: ("Memória do time", "memória compartilhada", False),
+    8090: ("Patinho", "agenda · login", False),
 }
-ORDEM = [8096, 1985, 1984, 20211, 8085, 8081, 8082, 8083, 8008, 8097, 8006]
+ORDEM = [8096, 1985, 1984, 20211, 8085, 8081, 8082, 8083, 8008, 8097, 8006, 8100, 8090]
 # portas que nunca entram na lista (o proprio hub, ssh, bancos, relay interno)
 FORA = {22, 53, 80, 443, 111, 3306, 5432, 6379, 6881, 8080, 8554, 8555, 8787, 2049,
-        8090, 8095, 8098, 8099}   # 8090/95/98/99 = coluna Cloudflare
+        8095, 8098, 8099}   # 8095/98/99 = so coluna Cloudflare; patinho (8090) entra nos dois
 # porta efemera (37610, 49536...) nao e servico
 EFEMERA = 30000
 
