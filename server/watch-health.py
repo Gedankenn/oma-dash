@@ -13,6 +13,7 @@ e uma linha em stderr/stdout por alerta (vai para o journal do timer).
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -22,9 +23,16 @@ MOUNTS = ("/", "/data", "/boot")
 SPACE_WARN = 85
 SPACE_CRIT = 92
 TEMP_WARN = 55
-# ids silenciados de proposito (o dono decidiu nao ver o banner deste HD)
-MUTE = {"smart-sdd-fail"}
+# ids silenciados de proposito
+MUTE = set()
+# SMART e temperatura ja tem card proprio (STORAGE/SMART): vao para a API com
+# card="smart" e banner=false. Nunca viram banner e nunca sao escritos no HTML.
+SMART_CARD = "smart"
 SMART_STALE_H = 48
+# containers que fazem parte do servico do dia a dia; se um cair, o banner avisa
+# (foi o que faltou quando o qBittorrent ficou em "Created" no boot)
+CRIT_CONTAINERS = ("omanet", "oma-hub", "pericia-site", "patinho", "patinho-backup",
+                   "filebrowser", "jellyfin", "qbittorrent", "romm")
 
 
 def timeout_handler(signum, frame):
@@ -35,16 +43,24 @@ class Checker:
     def __init__(self):
         self.alerts = []
 
-    def add(self, ident, level, text):
+    def add(self, ident, level, text, card=None):
         if ident in MUTE:
             return
-        self.alerts.append({"id": ident, "level": level, "text": text})
+        alerta = {"id": ident, "level": level, "text": text, "src": "storage"}
+        if card:
+            # fato continua disponivel na API (?all=1), so nao ocupa o banner
+            alerta["card"] = card
+            alerta["banner"] = False
+        self.alerts.append(alerta)
 
     # --- RAID / md -------------------------------------------------------
     def md(self):
         try:
             with open("/proc/mdstat") as f:
                 lines = f.read().splitlines()
+        except FileNotFoundError:
+            # sem modulo md carregado nao existe array nenhum: nao e falha
+            return
         except Exception as e:
             self.add("mdstat", "warn", f"nao consegui ler /proc/mdstat: {e}")
             return
@@ -133,12 +149,14 @@ class Checker:
             with open(DISKS_JSON) as f:
                 payload = json.load(f)
         except Exception as e:
-            self.add("smart-missing", "warn", f"disks.json ilegivel: {e}")
+            self.add("smart-missing", "warn", f"disks.json ilegivel: {e}",
+                     card=SMART_CARD)
             return
         age_h = (time.time() - payload.get("ts", 0)) / 3600
         if age_h > SMART_STALE_H:
             self.add("smart-stale", "warn",
-                     f"SMART sem atualizar ha {age_h:.0f}h (disks-health.timer parado?)")
+                     f"SMART sem atualizar ha {age_h:.0f}h (disks-health.timer parado?)",
+                     card=SMART_CARD)
         for d in payload.get("disks", []):
             dev = d.get("device", "?")
             model = d.get("model") or ""
@@ -147,17 +165,36 @@ class Checker:
                 if d.get("reallocated"):
                     extra += f", {d['reallocated']} setores realocados"
                 self.add(f"smart-{dev}-fail", "crit",
-                         f"{dev} {model} com SMART FALHANDO{extra}")
+                         f"{dev} {model} com SMART FALHANDO{extra}",
+                         card=SMART_CARD)
             elif d.get("ok") is None:
                 self.add(f"smart-{dev}-nodata", "warn",
-                         f"{dev} sem leitura SMART ({d.get('error', 'sem dados')})")
+                         f"{dev} sem leitura SMART ({d.get('error', 'sem dados')})",
+                         card=SMART_CARD)
             t = d.get("temp")
             if isinstance(t, int) and t >= TEMP_WARN:
-                self.add(f"temp-{dev}", "warn", f"{dev} a {t}C")
+                self.add(f"temp-{dev}", "warn", f"{dev} a {t}C", card=SMART_CARD)
+
+    # --- containers --------------------------------------------------------
+    def containers(self):
+        try:
+            out = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                                 capture_output=True, text=True, timeout=15)
+        except Exception as e:
+            self.add("docker-ps", "warn", f"nao consegui listar containers: {e}")
+            return
+        if out.returncode != 0:
+            self.add("docker-ps", "warn",
+                     f"docker ps falhou: {(out.stderr or '').strip()[:120]}")
+            return
+        rodando = set(out.stdout.split())
+        for c in CRIT_CONTAINERS:
+            if c not in rodando:
+                self.add(f"ctr-{c}-down", "warn", f"container {c} nao esta rodando")
 
     def run(self):
         signal.signal(signal.SIGALRM, timeout_handler)
-        for step in (self.md, self.mounts, self.smart):
+        for step in (self.md, self.mounts, self.smart, self.containers):
             try:
                 step()
             except Exception as e:
