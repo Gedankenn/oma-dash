@@ -244,7 +244,8 @@ function renderSnapraid(sp) {
 function renderAlerts(al) {
   const bar = $("#alertBar");
   if (!bar) return;
-  const list = (al && al.alerts) || [];
+  // segunda barreira: item com card proprio (ex.: SMART) nunca entra no banner
+  const list = ((al && al.alerts) || []).filter((a) => a.banner !== false && !a.card);
   if (!list.length) { bar.hidden = true; bar.innerHTML = ""; bar.className = "alertbar"; return; }
   const crit = list.filter((a) => a.level === "crit").length;
   bar.hidden = false;
