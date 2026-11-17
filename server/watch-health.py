@@ -22,6 +22,8 @@ MOUNTS = ("/", "/data", "/boot")
 SPACE_WARN = 85
 SPACE_CRIT = 92
 TEMP_WARN = 55
+# ids silenciados de proposito (o dono decidiu nao ver o banner deste HD)
+MUTE = {"smart-sdd-fail"}
 SMART_STALE_H = 48
 
 
@@ -34,6 +36,8 @@ class Checker:
         self.alerts = []
 
     def add(self, ident, level, text):
+        if ident in MUTE:
+            return
         self.alerts.append({"id": ident, "level": level, "text": text})
 
     # --- RAID / md -------------------------------------------------------

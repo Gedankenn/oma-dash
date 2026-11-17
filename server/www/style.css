@@ -60,7 +60,7 @@ body{
   grid-template-columns:repeat(12,minmax(0,1fr));
   grid-template-areas:
     "host host host host host host mem mem mem therm therm therm"
-    "net net net net sky sky sky sky mx mx mx mx"
+    "net net net sky sky sky mcp mcp mx mx mx mx"
     "svc svc con con sto sto sm sm mx mx mx mx"
     "dev dev dev dev dev dev dev dev proc proc proc proc";
   /* four bands in fractions of the board: they always add up to the viewport,
@@ -74,6 +74,19 @@ body{
 .a-net{grid-area:net}   .a-sky{grid-area:sky} .a-mx{grid-area:mx}
 .a-svc{grid-area:svc}   .a-con{grid-area:con} .a-sto{grid-area:sto}
 .a-smart{grid-area:sm}     .a-dev{grid-area:dev} .a-proc{grid-area:proc}
+.a-mcp{grid-area:mcp}
+
+/* ---------- MCP de memoria (acervo + chamadas) ---------- */
+.a-mcp .mcp-kinds{display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 10px; margin:0 0 4px;
+  font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--mute)}
+.a-mcp .mcp-kinds .kd{font-variant-numeric:tabular-nums}
+.a-mcp .mcp-kinds .k-dec{color:var(--amber)}
+.a-mcp .mcp-kinds .k-fato{color:var(--cyan)}
+.a-mcp .mcp-kinds .k-ref{color:var(--violet)}
+.a-mcp .mcp-kinds .k-db{margin-left:auto; color:var(--mute)}
+.a-mcp .tag.ok{color:var(--lime)}
+.a-mcp .tag.bad{color:var(--red)}
+.a-mcp{grid-area:mcp}
 
 @media (max-width:1180px){
   body{overflow:auto}
@@ -81,7 +94,7 @@ body{
     grid-template-rows:repeat(5,minmax(150px,auto)); height:auto; min-height:0;
     grid-template-areas:
       "host host host mem mem therm"
-      "net net net sky sky sky"
+      "net net sky sky mcp mcp"
       "svc svc con con mx mx"
       "sto sto sm sm mx mx"
       "dev dev dev dev proc proc";}
@@ -91,7 +104,7 @@ body{
 @media (max-width:760px){
   body{overflow:auto}
   .grid{grid-template-columns:1fr; grid-template-rows:none; height:auto;
-    grid-template-areas:"host" "mem" "therm" "net" "sky" "mx" "svc" "con" "sto" "ev" "proc" "dev";}
+    grid-template-areas:"host" "mem" "therm" "net" "sky" "mcp" "mx" "svc" "con" "sto" "ev" "proc" "dev";}
 }
 .card{
   position:relative; padding:12px 14px 14px; min-height:0; overflow:hidden;
@@ -478,3 +491,17 @@ h1, h2, .hdr, .clock{
 /* o atributo hidden perdia para .alertbar{display:flex}: barra vazia deixava
    um fio ambar de 18 px (QA 17/11) */
 #alertBar[hidden]{display:none!important; height:0; margin:0; padding:0; border:0}
+
+/* resync de paridade (snapraid) */
+.a-sto{padding-bottom:6px}
+.a-sto .disk{padding:3px 0}
+.a-sto .disk .sub{font-size:9px;margin-top:1px}
+.a-sto .card-h{margin-bottom:4px}
+.syncbox{margin-top:3px;padding-top:5px;border-top:1px solid var(--line)}
+.sync-h{display:flex;align-items:baseline;gap:7px;font-size:8.5px;letter-spacing:1.1px;
+  color:var(--mute);text-transform:uppercase;line-height:1.1;white-space:nowrap;overflow:hidden}
+.sync-h b{color:var(--lime);font-size:10px;letter-spacing:.05em;font-variant-numeric:tabular-nums}
+.sync-h em{font-style:normal;margin-left:auto;font-size:8.5px;letter-spacing:.04em;color:var(--mute);
+  overflow:hidden;text-overflow:ellipsis}
+.syncbox .meter{height:4px;margin:3px 0 0}
+.syncbox.erro .sync-h b{color:var(--red)}

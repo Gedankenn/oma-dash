@@ -288,6 +288,65 @@ def disk_health():
         return None
 
 
+SNAPRAID_LOG = "/var/log/snapraid-sync-final.log"
+_snap_cache = {"ts": 0.0, "data": None}
+
+
+def snapraid():
+    """Progresso do sync de paridade (SnapRAID) lido do log do proprio sync."""
+    now = time.time()
+    if now - _snap_cache["ts"] < 5 and _snap_cache["data"] is not None:
+        return _snap_cache["data"]
+    info = {"running": False, "pct": None, "speed": "", "eta": "", "scanned": "",
+            "state": "unknown", "updated": None, "line": ""}
+    tail = ""
+    try:
+        st = os.stat(SNAPRAID_LOG)
+        info["updated"] = int(st.st_mtime)
+        with open(SNAPRAID_LOG, "rb") as fh:
+            fh.seek(max(0, st.st_size - 4000))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        pass
+    linhas = [ln.strip() for ln in tail.replace("\r", "\n").splitlines() if ln.strip()]
+    info["line"] = linhas[-1][:120] if linhas else ""
+    for ln in reversed(linhas):
+        m = re.match(r"^(\d+)%,\s*([\d.]+)\s*(\w+),\s*([\d.]+)\s*(\w+/s),.*?([\d.:]+)\s*ETA", ln)
+        if m:
+            info.update(pct=int(m.group(1)), scanned=m.group(2) + " " + m.group(3),
+                        speed=m.group(4) + " " + m.group(5), eta=m.group(6))
+            break
+    rodando = False
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    cmd = fh.read().decode("utf-8", "replace")
+            except OSError:
+                continue
+            if "snapraid" in cmd and "sync" in cmd:
+                rodando = True
+                break
+    except OSError:
+        pass
+    info["running"] = rodando
+    if rodando:
+        info["state"] = "syncing"
+    else:
+        ultimas = linhas[-40:]
+        if any("fim 0" in ln for ln in ultimas) or any("Everything is OK" in ln for ln in ultimas):
+            info["state"] = "ok"
+            info["pct"] = 100 if info["pct"] is not None else None
+        elif any(ln.startswith("fim ") for ln in ultimas):
+            info["state"] = "error"
+        else:
+            info["state"] = "idle"
+    _snap_cache.update(ts=now, data=info)
+    return info
+
+
 ALERTS_FILE = "/home/server/dash/alerts.json"
 
 
@@ -519,6 +578,7 @@ def stats():
         "docker_all": docker_ps_all(),
         "disk_health": disk_health(),
         "alerts": alerts(),
+        "snapraid": snapraid(),
         "dstats": _cache["dstats"][1],
         "health": health(),
         "procs": procs(),

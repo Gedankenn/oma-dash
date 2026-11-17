@@ -1,5 +1,5 @@
 /* OMA//DASH web — hybrid skin.
-   Data: /stats (2 s), /history (2 s), /network (25 s), /weather (5 min).
+   Data: /stats (2 s), /history (2 s), /network (25 s), /weather (5 min), /memory (15 s).
    Charts are hand-drawn on canvas with the same smoothing as the iDBox panel. */
 
 const $ = (s) => document.querySelector(s);
@@ -178,6 +178,37 @@ let lastAlive = null;
 let devAll = false;
 const stateCache = {};
 
+function renderSnapraid(sp) {
+  const box = $("#syncBox");
+  if (!box) return;
+  if (!sp || (!sp.running && !sp.state)) { box.hidden = true; return; }
+  const pct = sp.pct == null ? 0 : Math.max(0, Math.min(100, sp.pct));
+  const bar = $("#syncBar"), lab = $("#syncPct"), sub = $("#syncSub");
+  box.hidden = false;
+  let texto, cls, largura;
+  if (sp.running) {
+    texto = pct + "%"; cls = "ok"; largura = pct;
+    const partes = [];
+    if (sp.speed) partes.push(sp.speed);
+    if (sp.eta) partes.push("ETA " + sp.eta);
+    sub.textContent = partes.join(" · ") || "varrendo…";
+  } else if (sp.state === "ok") {
+    texto = "OK"; cls = "ok"; largura = 100;
+    sub.textContent = sp.updated ? "concluído " + new Date(sp.updated * 1000).toLocaleString("pt-BR", {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "concluído";
+  } else if (sp.state === "error") {
+    texto = "FALHOU"; cls = "bad"; largura = 0;
+    sub.textContent = sp.line || "snapraid retornou erro";
+  } else {
+    box.hidden = true;
+    return;
+  }
+  lab.textContent = texto;
+  bar.style.width = largura + "%";
+  bar.style.background = cls === "bad"
+    ? "linear-gradient(90deg,#ff3b54,#ff8a9b)"
+    : "linear-gradient(90deg,#9cff4a,#d6ff9e)";
+}
+
 function renderAlerts(al) {
   const bar = $("#alertBar");
   if (!bar) return;
@@ -272,6 +303,8 @@ function renderStats(d) {
     r.title = x.mount + ": " + fmtBytes(x.used) + " de " + fmtBytes(x.total);
     dk.appendChild(r);
   });
+
+  renderSnapraid(d.snapraid);
 
   const sh = d.disk_health;
   const sml = $("#smartList");
@@ -546,11 +579,64 @@ async function tickWeather() {
   wxTimer = setTimeout(tickWeather, ok ? 300000 : 30000);   /* 5 min, or 30 s while down */
 }
 
-tickStats(); tickNet(); tickWeather();
+function renderMemory(m) {
+  const h = m.health || {}, s = m.stats || {}, c = m.calls || {};
+  const t = $("#mcpTag");
+  if (!t) return;
+  const up = !!m.ok;
+  t.textContent = up ? "ONLINE" : "OFFLINE";
+  t.className = "tag " + (up ? "ok" : "bad");
+  $("#mcpTotal").textContent = s.total != null ? String(s.total) : "--";
+
+  const k = s.by_kind || {};
+  const ks = $("#mcpKinds");
+  ks.innerHTML = "";
+  [["dec", "decision", "k-dec"], ["fatos", "fact", "k-fato"], ["ref", "reference", "k-ref"]]
+    .forEach(([lab, key, cls]) => ks.appendChild(el("span", "kd " + cls,
+      (k[key] == null ? "--" : k[key]) + " " + lab)));
+  if (s.db_bytes != null) ks.appendChild(el("span", "kd k-db", fmtBytes(s.db_bytes)));
+
+  const sc = s.by_scope || {};
+  const ags = Object.keys(sc).filter((x) => x.startsWith("agent:")).length;
+  const prj = Object.keys(sc).filter((x) => x.startsWith("project:")).length;
+  const list = $("#mcpList");
+  list.innerHTML = "";
+  const row = (n, v, cls, tip) => {
+    const r = el("div", "row");
+    r.appendChild(el("span", "n", n));
+    r.appendChild(el("span", "v" + (cls ? " " + cls : ""), v));
+    if (tip) r.title = tip;
+    list.appendChild(r);
+  };
+  row("chamadas", String(c.total || 0), "ok",
+      (c.total || 0) + " chamadas de API desde o start do container \u00b7 "
+      + (c.last_hour || 0) + " na \u00faltima hora"
+      + (c.clients ? " \u00b7 clientes: " + Object.keys(c.clients).join(", ") : ""));
+  row("\u00faltima", c.last_at ? clock(c.last_at).slice(0, 5) : "--", c.last_at ? "" : "warn",
+      (c.last_path || "") + (c.last_at ? " \u00b7 " + clock(c.last_at) : ""));
+  row("escopos", String(Object.keys(sc).length), "",
+      ags + " agentes \u00b7 " + prj + " projetos \u00b7 " + (s.total || 0) + " mem\u00f3rias");
+  row("sa\u00fade", h.db && h.embed ? "ok" : (h.db ? "db" : "emb"),
+      h.db && h.embed ? "ok" : "bad",
+      "db " + (h.db ? "ok" : "falha") + " \u00b7 embed " + (h.embed ? "ok" : "falha")
+      + (m.uptime_s ? " \u00b7 " + fmtUp(m.uptime_s) + " no ar" : ""));
+  if (m.uptime_s) t.title = "no ar " + fmtUp(m.uptime_s) + " \u00b7 desde " + (m.started_at || "?");
+}
+
+async function tickMemory() {
+  try { renderMemory(await jget("/memory")); }
+  catch (e) {
+    const t = $("#mcpTag");
+    if (t) { t.textContent = "OFFLINE"; t.className = "tag bad"; }
+  }
+}
+
+tickStats(); tickNet(); tickWeather(); tickMemory();
 $("#devMore").addEventListener("click", () => { devAll = !devAll; tickNet(); });
 setInterval(tickStats, 2000);
 setInterval(() => { $("#clock").textContent = clock(); }, 1000);
 setInterval(tickNet, 25000);
+setInterval(tickMemory, 15000);
 
 window.addEventListener("resize", () => {
   clearTimeout(window.__rz);
