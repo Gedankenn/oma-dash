@@ -196,6 +196,27 @@ function bindSnapraid() {
   });
 }
 
+// lista longa com rolagem interna: esmaece a base e diz quantos itens ainda
+// faltam abaixo (antes a ultima linha aparecia cortada pela metade)
+const rollers = [];
+function marcaRolagem(el, hint) {
+  if (!el || !hint) return;
+  if (!rollers.some((p) => p.el === el)) {
+    rollers.push({ el, hint });
+    el.addEventListener("scroll", () => marcaRolagem(el, hint), { passive: true });
+  }
+  const resta = el.scrollHeight - el.clientHeight - el.scrollTop;
+  const fim = resta > 2;
+  el.classList.toggle("mais", fim);
+  hint.hidden = !fim;
+  if (fim) {
+    const h = el.firstElementChild ? el.firstElementChild.getBoundingClientRect().height + 1 : 1;
+    const abaixo = el.children.length - Math.floor((el.scrollTop + el.clientHeight) / h);
+    hint.innerHTML = "mais <b>" + abaixo + "</b> abaixo";
+  }
+}
+addEventListener("resize", () => rollers.forEach((p) => marcaRolagem(p.el, p.hint)));
+
 function renderSnapraid(sp) {
   const box = $("#syncBox");
   if (!box) return;
@@ -232,6 +253,9 @@ function renderSnapraid(sp) {
     box.hidden = true;
     return;
   }
+  // a cor do rotulo acompanha o estado (PARADO/FALHOU em ambar/vermelho, nunca
+  // verde: verde em PARADO dizia "esta tudo bem" para uma paridade invalida)
+  box.className = "syncbox " + cls;
   lab.textContent = texto;
   bar.style.width = largura + "%";
   bar.style.background = cls === "bad"
@@ -398,7 +422,9 @@ function renderStats(d) {
   dk2.slice().sort((a, b) => ((b.up ? 1 : 0) - (a.up ? 1 : 0)) || a.name.localeCompare(b.name))
     .forEach((c) => {
     const r = el("div", "row ct");
-    r.appendChild(el("span", "n", c.name));
+    const nome = el("span", "n", c.name);
+    nome.title = c.name;
+    r.appendChild(nome);
     const v = el("span", "v" + (c.up ? " ok" : " bad"), c.up ? "UP" : "OFF");
     v.title = c.status || c.state || "";
     r.appendChild(v);
@@ -424,6 +450,7 @@ function renderStats(d) {
     r.appendChild(b);
     dl.appendChild(r);
   });
+  marcaRolagem(dl, $("#dockHint"));
 
   const pc = $("#procList");
   pc.innerHTML = "";

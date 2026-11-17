@@ -104,7 +104,7 @@ body{
 @media (max-width:760px){
   body{overflow:auto}
   .grid{grid-template-columns:1fr; grid-template-rows:none; height:auto;
-    grid-template-areas:"host" "mem" "therm" "net" "sky" "mcp" "mx" "svc" "con" "sto" "ev" "proc" "dev";}
+    grid-template-areas:"host" "mem" "therm" "net" "sky" "mcp" "mx" "svc" "con" "sto" "sm" "proc" "dev";}
 }
 .card{
   position:relative; padding:12px 14px 14px; min-height:0; overflow:hidden;
@@ -161,7 +161,15 @@ body{
 .rows::-webkit-scrollbar{width:6px;height:6px}
 .rows::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
 .rows::-webkit-scrollbar-track{background:transparent}
-  -webkit-mask-image:linear-gradient(#000 calc(100% - 14px), transparent); mask-image:linear-gradient(#000 calc(100% - 14px), transparent)}
+/* lista que rola de verdade: barra reservada, esmaecido na base e contador do
+   que falta. Antes as 21 linhas de CONTAINERS terminavam cortadas no meio, sem
+   sinal de continuacao (o mask acima estava num bloco orfao e nunca valia). */
+.rows.mais{-webkit-mask-image:linear-gradient(#000 calc(100% - 14px), rgba(0,0,0,.05));
+  mask-image:linear-gradient(#000 calc(100% - 14px), rgba(0,0,0,.05))}
+.roll-hint{margin:2px 0 0; flex:0 0 auto; text-align:right; line-height:1.3; padding-right:12px;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim)}
+.roll-hint b{color:var(--dim); font-weight:600}
+.roll-hint[hidden]{display:none}
 .rows .row{
   display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center;
   padding:5px 0; border-bottom:1px solid rgba(18,40,60,.55); font-size:12px;
@@ -209,7 +217,7 @@ font-size:10px;letter-spacing:.04em;border-radius:4px;padding:1px 6px;cursor:poi
 .days{display:flex; gap:10px; margin-left:auto}
 .day{display:flex; flex-direction:column; justify-content:center}
 .day{
-  min-width:96px; padding:8px 10px; border:1px solid var(--line); border-radius:2px;
+  min-width:96px; padding:5px 10px; border:1px solid var(--line); border-radius:2px;
   background:rgba(10,18,29,.6); text-align:left;
 }
 .day b{display:block; font-size:11px; letter-spacing:.18em; color:var(--cyan); margin-bottom:6px}
@@ -300,7 +308,8 @@ tr:hover td{background:rgba(34,224,255,.05)}
 
 @media (max-width:760px){
   body{padding:0 12px 40px}
-  .card.hero,.card.wide{grid-column:span 1}
+  /* sem grid-column aqui: o span vencia o grid-area nomeado e criava 3 pistas
+     implicitas (154/0/184 px), deixando todo card com 162 px no celular */
   .hero-num .px{font-size:48px}
   .days{margin-left:0; flex-wrap:wrap}
   .top{flex-wrap:wrap}
@@ -502,13 +511,14 @@ h1, h2, .hdr, .clock{
 .a-sto .disk .sub{font-size:9px;margin-top:1px}
 .a-sto .card-h{margin-bottom:4px}
 .syncbox{margin-top:3px;padding-top:5px;border-top:1px solid var(--line)}
-.sync-h{display:flex;align-items:baseline;gap:7px;font-size:8.5px;letter-spacing:1.1px;
+.sync-h{display:flex;align-items:baseline;gap:7px;font-size:9.5px;letter-spacing:.8px;
   color:var(--mute);text-transform:uppercase;line-height:1.15;white-space:normal;flex-wrap:wrap}
 .sync-h b{color:var(--lime);font-size:10px;letter-spacing:.05em;font-variant-numeric:tabular-nums}
-.sync-h em{font-style:normal;margin-left:auto;font-size:8.5px;letter-spacing:.04em;color:var(--mute);
+.sync-h em{font-style:normal;margin-left:auto;font-size:9.5px;letter-spacing:.04em;color:var(--dim);
   white-space:normal;overflow:visible;text-overflow:clip;flex:1 1 100%;text-align:right}
 .syncbox .meter{height:4px;margin:3px 0 0}
-.syncbox.erro .sync-h b{color:var(--red)}
+.syncbox.warn .sync-h b{color:var(--amber)}
+.syncbox.bad .sync-h b,.syncbox.erro .sync-h b{color:var(--red)}
 
 /* botoes de controle do sync de paridade */
 .sync-ctl{margin-left:auto;display:flex;gap:4px;align-items:center}
