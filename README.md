@@ -192,3 +192,20 @@ systemctl --user restart oma-dash
 Same pattern for `server/www/*`, `systemd/*`, `idbox-lcd/*` and `lan-hub/sync.py`.
 Runtime files (`state.json`, `alerts.json`, `disks.json`, logs, `*.bak-*`) are intentionally **not**
 in the repository.
+
+## Regra: todo serviço que escuta numa porta aparece sozinho
+
+Pedido do dono (17/11): serviço novo não pode depender de ninguém cadastrar.
+
+- `statsd.py` roda, a cada 5 min, um inventário das portas TCP que o host serve
+  (`ss -ltnH`, fora do loopback, 1024–32767) e sonda cada uma: HTTP sem seguir redirect
+  e, se não for HTTP, TCP connect. Nome vem do catálogo (`services.json`), do container
+  (`docker ps`) ou é `porta NNNN`.
+- Saída: `dash/services-auto.json` (consumido pelo card SERVICES do dash) e
+  `lan-hub/lan-auto.json` (consumido pelo rack LAN do NETWATCH), com estado, latência,
+  primeira vez visto, amostras e uptime.
+- Toda porta que existia e parou de responder acumula falha e vira alerta
+  (`port:<n>`): 2 rodadas = `warn`, 3+ = `crit`. Volta a responder, fecha.
+- Consequência: não existe lista paralela para manter. Serviço novo = aparece em até
+  5 min no dash e no hub, com estatística; a única coisa manual é o **nome bonito**
+  (`META` do `lan-hub/sync.py` ou o catálogo).

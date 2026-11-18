@@ -439,6 +439,7 @@ h1, h2, .hdr, .clock{
 var SERVICES = [
   { name: "Jellyfin",        role: "cinema em casa",                  port: 8096, tls: false },
   { name: "OMA // DASH",     role: "console do servidor",             port: 1985, tls: false },
+  { name: "Financeiro",      role: "relatórios · contador",           port: 8091, tls: false },
   { name: "Câmeras",         role: "go2rtc",                          port: 1984, tls: false },
   { name: "OMA // NET",      role: "dispositivos · presença",         port: 20211, tls: false },
   { name: "PERÍCIAS",        role: "casos · laudos · autos",          port: 8085, tls: false },
@@ -448,7 +449,8 @@ var SERVICES = [
   { name: "Jogos",           role: "biblioteca oma:// neste PC",      port: 8008, tls: false },
   { name: "Retro Hub",       role: "joguinhos no navegador",          port: 8097, tls: false },
   { name: "Windows",         role: "dockurr · viewer",                port: 8006, tls: false },
-  { name: "porta 8100",      role: "novo serviço",                    port: 8100, tls: false }
+  { name: "Memória do time", role: "memória compartilhada",           port: 8100, tls: false },
+  { name: "Patinho",         role: "agenda · login",                  port: 8090, tls: false }
 ];
 
 var host = location.hostname || "192.168.5.245";
@@ -529,7 +531,8 @@ document.addEventListener("keydown", function (ev) {
   var MAP = {
     "8096": "jellyfin", "8082": "arquivos", "8083": "gtavc", "8008": "jogos",
     "8097": "retro", "8081": "qbit", "1984": "cameras", "20211": "omanet",
-    "8085": "pericia", "80": "hub", "1985": "dash"
+    "8085": "pericia", "80": "hub", "1985": "dash",
+    "8090": "patinho", "8100": "memoria"
   };
 
   function fmtBytes(b) {
@@ -554,7 +557,7 @@ document.addEventListener("keydown", function (ev) {
     var el = row.el, span = row.span;
     if (!s) {
       el.setAttribute("data-state", "atencao");
-      span.children[0].innerHTML = '<i class="dot"></i><b title="serviço sem telemetria">n/d</b>';
+      span.children[0].innerHTML = '<i class="dot"></i><b title="sem sonda: o coletor ainda não mediu este serviço">sem sonda</b>';
       for (var i = 1; i < span.children.length; i++) {
         span.children[i].className = span.children[i].className.replace(/\s*nil/g, "") + " nil";
         span.children[i].textContent = "—";
@@ -668,6 +671,29 @@ document.addEventListener("keydown", function (ev) {
           paint(r, s);
           var pc = r.el.querySelector(".porta");
           if (pc && s.ms != null) pc.textContent = "443 · " + s.ms + " ms";
+        });
+      })
+      .catch(function () {});
+
+    // inventario de portas (regra do dono: todo servico da LAN aparece e tem
+    // estatistica, mesmo que ninguem o tenha cadastrado). Fonte: statsd.py
+    // -> /home/server/lan-hub/lan-auto.json, atualizado a cada 5 min.
+    fetch("/lan-auto.json", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var porPorta = d.portas || {};
+        rows.forEach(function (r) {
+          if (!r.port) return;
+          var p = porPorta[String(r.port)];
+          if (!p) return;
+          paint(r, {
+            kind: "lan", hasLog: false, status: { up: !!p.ok },
+            w: { d1: { samples: p.samples || 1, uptime: p.uptime, rx: 0, tx: 0,
+                       netSamples: 0, cpu: -1, mem: -1, reqs: 0, bytes: 0,
+                       uniq: 0, cf_reqs: 0, cf_bytes: 0, cf_uniq: 0 } }
+          });
+          var pc = r.el.querySelector(".porta");
+          if (pc) pc.textContent = r.port + (p.ms ? " · " + p.ms + " ms" : (p.ok ? "" : " · fora"));
         });
       })
       .catch(function () {});

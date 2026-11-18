@@ -377,6 +377,11 @@ SERVICES_JSON = "/home/server/services.json"          # catalogo unico (tools/ca
 SERVICES_STATE = "/home/server/dash/services-state.json"
 SERVICES_PERIOD = 300                                # s entre sondagens (5 min)
 LAN_IP = os.environ.get("DASH_LAN_IP", "192.168.5.245")
+INVENTORY = "/home/server/dash/services-auto.json"        # inventario de portas (regra do dono)
+INVENTORY_HUB = "/home/server/lan-hub/lan-auto.json"      # mesma coisa para o hub :80
+PORTA_MIN, PORTA_MAX = 1024, 32768                        # ignora sistema e efemeras
+PORTA_FORA = {6881}                                       # P2P do qBittorrent nao e "servico"
+INVENTORY_HIST = "/home/server/dash/services-auto-hist.json"
 NETWATCH_WINDOW = 6 * 3600          # s: so o que e recente vira alerta de tela
 
 
@@ -489,6 +494,171 @@ def probe_services(catalogo=SERVICES_JSON, estado=SERVICES_STATE):
     return dados
 
 
+def _portas_escutando():
+    """Portas TCP fora do loopback que o host esta servindo (sem root, ss basta)."""
+    out = sh("ss -ltnH 2>/dev/null") or ""
+    portas = {}
+    for linha in out.splitlines():
+        p = linha.split()
+        if len(p) < 4:
+            continue
+        local = p[3]
+        if local.startswith("127.") or local.startswith("[::1]"):
+            continue
+        m = re.search(r":(\d+)$", local)
+        if not m:
+            continue
+        porta = int(m.group(1))
+        if PORTA_MIN <= porta < PORTA_MAX and porta not in PORTA_FORA:
+            portas[porta] = local
+    return portas
+
+
+def _dono_das_portas():
+    """container -> portas publicadas, via docker (sem root)."""
+    dono = {}
+    out = sh("docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null") or ""
+    for linha in out.splitlines():
+        if "|" not in linha:
+            continue
+        nome, ports = linha.split("|", 1)
+        for m in re.finditer(r":(\d+)->", ports):
+            dono.setdefault(int(m.group(1)), nome)
+    return dono
+
+
+def _tcp_abre(porta, host=LAN_IP, timeout=1.5):
+    import socket
+    t0 = time.time()
+    try:
+        with socket.create_connection((host, porta), timeout=timeout):
+            return True, int((time.time() - t0) * 1000)
+    except Exception:
+        return False, 0
+
+
+def inventario_portas(catalogo=SERVICES_JSON, hist_path=INVENTORY_HIST,
+                      saida=INVENTORY, espelho=INVENTORY_HUB):
+    """REGRA DO DONO: toda porta rodando na LAN entra na dashboard, sempre.
+
+    Descobre sozinho o que esta escutando (nada de lista manual): sonda HTTP
+    sem seguir redirect e, se nao for HTTP, TCP connect. Guarda primeira vez
+    visto, amostras e uptime para o hub/dash mostrarem estatistica de servico
+    que ninguem cadastrou.
+    """
+    try:
+        with open(catalogo) as f:
+            servicos = (json.load(f) or {}).get("servicos") or []
+    except Exception:
+        servicos = []
+    catalogo_url = {}
+    for s in servicos:
+        u = (s.get("url_local") or "")
+        m = re.search(r":(\d+)(/|$)", u)
+        if m:
+            catalogo_url[int(m.group(1))] = s
+    try:
+        with open(hist_path) as f:
+            hist = json.load(f) or {}
+    except Exception:
+        hist = {}
+
+    opener = _probe_opener()
+    agora = int(time.time())
+    dono = _dono_das_portas()
+    itens = {}
+    for porta, local in sorted(_portas_escutando().items()):
+        alvo = "https://%s:%d/" % (LAN_IP, porta) if porta == 8083 else "http://%s:%d/" % (LAN_IP, porta)
+        t0 = time.time()
+        code = _probe_code(opener, alvo)
+        modo = "http"
+        ms = int((time.time() - t0) * 1000)
+        if not code:
+            ok_tcp, ms = _tcp_abre(porta)
+            modo = "tcp" if ok_tcp else "fechado"
+            code = 0
+        ok = bool(code) or modo == "tcp"
+        h = hist.get(str(porta)) or {}
+        s_hist = (h.get("s") or "") + ("1" if ok else "0")
+        s_hist = s_hist[-2016:]
+        hist[str(porta)] = {"s": s_hist, "first_seen": h.get("first_seen") or agora,
+                            "nome": h.get("nome") or (catalogo_url.get(porta) or {}).get("nome")
+                                    or dono.get(porta) or ""}
+        base = catalogo_url.get(porta) or {}
+        itens[str(porta)] = {
+            "porta": porta, "bind": local, "nome": base.get("nome") or dono.get(porta) or ("porta %d" % porta),
+            "container": dono.get(porta) or "", "catalogo": base.get("id") or "",
+            "url": alvo, "modo": modo, "code": code or 0, "ok": ok, "ms": ms,
+            "fails": 0 if ok else int((h.get("fails") or 0)) + 1,
+            "first_seen": hist[str(porta)]["first_seen"],
+            "samples": len(s_hist),
+            "uptime": round(100.0 * s_hist.count("1") / len(s_hist), 1) if s_hist else 0.0,
+            "checked": agora,
+        }
+        hist[str(porta)]["fails"] = itens[str(porta)]["fails"]
+
+    # porta que ja existia e nao esta mais escutando: continua no inventario
+    # (com falha acumulada) para virar alerta; so sai quando volta ou em 30 dias.
+    escutando = set(itens)
+    for porta, h in list(hist.items()):
+        if porta in escutando or not h.get("first_seen"):
+            continue
+        if agora - int(h.get("first_seen") or 0) < 300:
+            continue                                  # visto ha <5 min: ainda subindo
+        if agora - int(h.get("checked") or agora) > 30 * 86400:
+            hist.pop(porta, None)
+            continue
+        s_hist = (h.get("s") or "") + "0"
+        s_hist = s_hist[-2016:]
+        fails = int(h.get("fails") or 0) + 1
+        h.update({"s": s_hist, "fails": fails, "checked": agora})
+        itens[porta] = {"porta": int(porta), "bind": "—", "nome": h.get("nome") or ("porta %s" % porta),
+                        "container": "", "catalogo": "", "url": "", "modo": "fechado",
+                        "code": 0, "ok": False, "ms": 0, "fails": fails,
+                        "first_seen": h.get("first_seen"), "samples": len(s_hist),
+                        "uptime": round(100.0 * s_hist.count("1") / len(s_hist), 1) if s_hist else 0.0,
+                        "checked": agora}
+
+    dados = {"ts": agora, "host": LAN_IP, "total": len(itens),
+             "up": sum(1 for i in itens.values() if i["ok"]), "portas": itens}
+    for destino in (saida, espelho):
+        try:
+            tmp = destino + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(dados, f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, destino)
+        except Exception:
+            pass
+    try:
+        tmp = hist_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(hist, f)
+        os.replace(tmp, hist_path)
+    except Exception:
+        pass
+    return dados
+
+
+def inventario_alerts(now=None):
+    """Porta que existia e sumiu vira achado (2 falhas warn, 3+ crit)."""
+    try:
+        with open(INVENTORY) as f:
+            d = json.load(f) or {}
+    except Exception:
+        return []
+    out = []
+    for porta, p in (d.get("portas") or {}).items():
+        fails = int(p.get("fails") or 0)
+        if fails < 2 or p.get("ok"):
+            continue
+        out.append({"id": "port:" + porta, "src": "services",
+                    "level": "crit" if fails >= 3 else "warn",
+                    "text": "porta %s (%s) parou de responder há %d rodadas" % (
+                        porta, p.get("nome") or "sem nome", fails),
+                    "ts": d.get("ts") or int(now or time.time()), "banner": True})
+    return out
+
+
 def services_alerts(now=None, estado=SERVICES_STATE):
     """Achados da fonte `services`.
 
@@ -527,10 +697,12 @@ def services_alerts(now=None, estado=SERVICES_STATE):
 
 def _services_loop():
     while True:
-        try:
-            probe_services()
-        except Exception as e:
-            print("services probe:", e, flush=True)
+        # falha de sonda nao derruba o loop: a proxima rodada tenta de novo
+        for etapa in (probe_services, inventario_portas):
+            try:
+                etapa()
+            except Exception:
+                pass
         time.sleep(SERVICES_PERIOD)
 
 
@@ -551,6 +723,7 @@ def alerts_banner(include_hidden=False, now=None):
                       "text": a.get("text") or "", "ts": bruto.get("ts")})
     itens += netwatch_alerts(now)
     itens += services_alerts(now)
+    itens += inventario_alerts(now)
     return {"ts": int(now), "ok": not itens, "alerts": itens,
             "counts": {lv: sum(1 for a in itens if a["level"] == lv)
                        for lv in ("crit", "warn", "info")}}
@@ -643,11 +816,34 @@ def _check(item):
 
 
 def health():
+    """Card SERVICES: lista curada + TODA porta descoberta pelo inventario.
+
+    Regra do dono (17/11): servico novo aparece sem ninguem cadastrar. O que
+    esta na lista curada mantem o nome bonito; o resto entra como "porta NNNN"
+    (ou nome do container) com estado e latencia.
+    """
     now = time.time()
     if now - _cache["health"][0] < 6 and _cache["health"][1] is not None:
         return _cache["health"][1]
     with ThreadPoolExecutor(max_workers=len(SERVICES)) as ex:
         out = list(ex.map(_check, SERVICES))
+    cobertas = set()
+    for s in SERVICES:
+        m = re.search(r":(\d+)(/|$)", s[1])
+        if m:
+            cobertas.add(int(m.group(1)))
+    try:
+        with open(INVENTORY) as f:
+            inv = (json.load(f) or {}).get("portas") or {}
+    except Exception:
+        inv = {}
+    for porta, p in sorted(inv.items(), key=lambda kv: int(kv[0])):
+        if int(porta) in cobertas:
+            continue
+        out.append({"name": "%s :%s" % (p.get("nome") or "porta", porta),
+                    "url": p.get("url") or "", "ok": bool(p.get("ok")),
+                    "code": str(p.get("code") or ("tcp" if p.get("modo") == "tcp" else "--")),
+                    "ms": p.get("ms") or 0, "auto": True})
     _cache["health"] = (now, out)
     return out
 
@@ -1580,6 +1776,8 @@ class Handler(BaseHTTPRequestHandler):
                             k, v = par.split("=", 1)
                             qs[k] = v
                 self._json(api_alerts(qs))
+            elif p in ("/financeiro", "/financeiro/"):
+                self._file("financeiro.html")
             elif p == "/alerts.json":
                 self._json(alerts() or {"ts": time.time(), "ok": True, "alerts": []})
             elif p == "/history":
